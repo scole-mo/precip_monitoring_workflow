@@ -1,0 +1,17 @@
+#!/bin/bash -l
+#
+# Usage moxie-run PYTHON_CMD_WITHOPTS
+
+conda activate "$OEMPLOT_CONDA_ENV"
+RC=$?
+if [[ "$CONDA_DEFAULT_ENV" == "base"  ]] ; then
+    echo "[ERROR] Conda loaded base environment" | tee >(cat >&2)
+    exit 1
+fi
+if [[ $RC -eq 0 ]] ; then
+    which python 1>&2
+    which python3 1>&2
+    exec "$@"
+    RC=$?
+fi
+exit $RC
