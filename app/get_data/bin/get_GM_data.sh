@@ -3,6 +3,9 @@
 fcst_date=$1
 datadir=$2
 
+# Constants
+readonly STASH_CODES="(5201,5202,4201,4202)"
+
 year=${fcst_date:0:4}
 date=${fcst_date:0:8}
 hour=${fcst_date:9:2}
@@ -43,7 +46,7 @@ mass-pull () {
   cat >query <<EOF
 begin
  filename="prods_op_gl-up_${date}_${hour}_${analysis}.pp"
- stash=(5201,5202,4201,4202)
+ stash=${STASH_CODES}
 end
 EOF
 
@@ -62,7 +65,7 @@ touch query
 cat >query <<EOF
   begin
     filename="prods_op_gl-mn_${date}_${hour}_*.pp"
-    stash=(5201,5202,4201,4202)
+    stash=${STASH_CODES}
     lbft=${lead}
   end
 EOF
@@ -102,7 +105,7 @@ touch query1
 cat >query1 <<EOF
 begin
  filename="prods_op_gl-mn_${date}_${hour}_*.pp"
- stash=(5201,5202,4201,4202)
+ stash=${STASH_CODES}
  lbft=${lead}
 end
 EOF
