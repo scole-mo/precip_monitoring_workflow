@@ -40,7 +40,7 @@ leads_24h=$(echo $leads_24h)  # Remove trailing space if needed
 
 #################### UPDATE ANALYSES ##########################
 
-mass-pull () {
+pull-analysis () {
   local analysis=$1 
   touch query
   cat >query <<EOF
@@ -55,12 +55,12 @@ EOF
 }
 
 for analysis in "${analysis_runs[@]}"; do
-  mass-pull "$analysis"
+  pull-analysis "$analysis"
 done
 
 #################### 6 hrly ###########################
 
-mass-pull () {
+pull-forecast () {
 touch query
 cat >query <<EOF
   begin
@@ -89,7 +89,7 @@ do
   echo ${this_lead}
   file_to_cat="${datadir}/6_hour/${fcst_date}_gl-mn_T${this_lead}.pp"
   list_of_files=$(echo ${list_of_files} "${file_to_cat} ")
-  mass-pull
+  pull-forecast
   rm query
 done
 
@@ -100,7 +100,7 @@ cat $list_of_files > ${datadir}/6_hour/${fcst_date}_gl-mn_${accum}.pp
 
 ##################### 24 hrly ##########################
 
-mass-pull1 () {
+pull-forecast-24h () {
 touch query1
 cat >query1 <<EOF
 begin
@@ -126,7 +126,7 @@ do
   echo ${this_lead}
   file_to_cat="${datadir}/24_hour/${fcst_date}_gl-mn_T${this_lead}.pp"
   list_of_files=$(echo ${list_of_files} "${file_to_cat} ")
-  mass-pull1
+  pull-forecast-24h
   rm query1
 done
 
