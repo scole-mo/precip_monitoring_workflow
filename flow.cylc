@@ -15,17 +15,17 @@
 
    [[graph]]
         PT6H = """
-            get_data => get_gpm => process_analysis => process_periods 
+            (get_data & get_gpm) => (process_analysis & process_periods) => run_series_analysis
         """
-        +PT6H/PT6H = """
-            process_periods[-PT6H] => get_data
-        """
+        #+PT6H/PT6H = """
+        #    process_periods[-PT6H] => get_data
+        #"""
         ##PT24H = """
       # ##     process_periods => run_series_analysis
        ## """
     {% if FINAL_CYCLE_POINT | default(False) %}
         R1/{{FINAL_CYCLE_POINT}} = """
-            process_periods => run_series_analysis
+            run_series_analysis
         """
     {% endif %}
 
