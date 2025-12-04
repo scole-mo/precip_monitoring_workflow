@@ -44,6 +44,11 @@ def parse_args():
 
     parser.add_argument("-p", "--parallel", action="store_true",
                         help="Enable parallelism")
+    
+    parser.add_argument("--cycle_point", help="Cycle point from workflow")
+
+    parser.add_argument("--max_lead", help="Maximum lead time")
+                        
 
     # Parse the command line.
     args = parser.parse_args()
@@ -93,6 +98,18 @@ def insert_datetime(filename, date_time):
     filename = filename.replace("%M", "{0:02d}".format(date_time.minute))
 
     return filename
+
+def generate_accumulation_periods(cycle_point, max_lead, accum_period):
+    end_forecast = cycle_point + datetime.timedelta(hours=max_lead)
+    current_start = cycle_point
+    
+    while current_start < end_forecast:
+        current_end = current_start + datetime.timedelta(hours=accum_period)
+        if current_end > end_forecast:
+            current_end = end_forecast
+        yield (current_start, current_end)
+        current_start = current_end
+
 
 def increment_dt(start_datetime, end_datetime, interval):
     '''
@@ -204,6 +221,11 @@ def main():
     out_dir = args.outdir
     obstype = args.obs
     acc_period = args.accum_period
+
+    ## Create output directory if it doesn't exist
+    period_outdir = os.path.join(out_dir, f"{acc_period}_hour_gpm")
+    os.makedirs(period_outdir, exist_ok=True)
+
     sdate = datetime.datetime.strptime(args.start_date, '%Y%m%d%H')
     edate = datetime.datetime.strptime(args.end_date, '%Y%m%d%H')
 
