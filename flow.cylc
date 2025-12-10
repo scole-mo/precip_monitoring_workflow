@@ -111,6 +111,7 @@
             ACCUM_DATA_DIR={{PROCESSED_DIR}}
             DATADIR={{DATA_DIR}}
             OUTPUT_BASE={{OUTPUT_BASE}}
+            AREA_MASKS={{AREA_MASKS}}
 
         [[[directives]]]
 		--mem = 20G

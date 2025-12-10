@@ -73,7 +73,7 @@ SERIES_ANALYSIS_OUTPUT_STATS_CTS = [FBIAS, GSS];
 SERIES_ANALYSIS_OUTPUT_STATS_CTC = ["TOTAL", "FY_OY", "FY_ON", "FN_OY", "FN_ON"];
 
 # Specify area masks for verification areas
-SERIES_ANALYSIS__MASK_POLY =
+##SERIES_ANALYSIS_MASK_POLY = {ENV[AREA_MASKS]}
 
 # grid to remap data. Value is set as the 'to_grid' variable in the 'regrid' dictionary
 # See MET User's Guide for more information
@@ -129,4 +129,4 @@ FCST_SERIES_ANALYSIS_INPUT_TEMPLATE ={init?fmt=%Y%m%dT%2H}00Z_6hr_accums.nc
 OBS_SERIES_ANALYSIS_INPUT_TEMPLATE = 6_hour_gpm/gpm_*_{valid?fmt=%Y%m%d%H}.nc
 
 # Optional subdirectories relative to SERIES_ANALYSIS_OUTPUT_DIR to write output from SeriesAnalysis
-SERIES_ANALYSIS_OUTPUT_TEMPLATE = 27_11_I{init?fmt=%Y%m%dT%H}_V{valid?fmt=%Y%m%d%H}_L{lead?fmt=%HH}.nc
+SERIES_ANALYSIS_OUTPUT_TEMPLATE = 10_12_I{init?fmt=%Y%m%dT%H}_V{valid?fmt=%Y%m%d%H}_L{lead?fmt=%HH}.nc

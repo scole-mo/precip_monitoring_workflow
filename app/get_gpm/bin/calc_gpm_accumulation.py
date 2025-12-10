@@ -5,10 +5,8 @@ import dateutil.rrule
 import os
 import sys
 import numpy as np
-
 import iris
 import iris.cube
-
 import cf_units
 
 def parse_args():
@@ -110,17 +108,7 @@ def generate_accumulation_periods(cycle_point, max_lead, accum_period):
         yield (current_start, current_end)
         current_start = current_end
 
-
-def increment_dt(start_datetime, end_datetime, interval):
-    '''
-    Increment datetime by given time interval (limited to integer hours)
-    '''
-    date_time = start_datetime
-    while date_time <= end_datetime:
-        yield min(date_time, end_datetime)
-        date_time += datetime.timedelta(hours=interval)
-
-def get_data(start_date, end_date, data_dir, gpm_type, accum_period):
+def get_data(start_date, end_date, data_dir, gpm_type, accum_period, max_lead):
     '''
     Retrieve requested GPM data type from internal MO netCDF-stored files.
     '''
@@ -134,8 +122,9 @@ def get_data(start_date, end_date, data_dir, gpm_type, accum_period):
     # get the first end accumulation date/time
     end_date_0 = start_date + datetime.timedelta(hours=accum_period)
     # generate start and end accumulation datetimes
-    start_accumulations = (increment_dt(start_date, end_date, accum_period) for x in range(num_periods))
-    end_accumulations = (increment_dt(end_date_0, end_date, accum_period) for x in range(num_periods))
+    start_accumulations = generate_accumulation_periods(start_date, max_lead, accum_period)
+    end_accumulations = generate_accumulation_periods(end_date_0, max_lead, accum_period)
+    print(f"this is from GAP {list(next(start_accumulations))}")
 
     print(gpm_type)
     if gpm_type == 'GPM':
@@ -221,6 +210,9 @@ def main():
     out_dir = args.outdir
     obstype = args.obs
     acc_period = args.accum_period
+    mlead = args.max_lead
+    print(f"Max lead time is {mlead}")
+    mlead = int(mlead)
 
     ## Create output directory if it doesn't exist
     period_outdir = os.path.join(out_dir, f"{acc_period}_hour_gpm")
@@ -237,7 +229,7 @@ def main():
         obs_label = obstype
 
     # fetch gpm data and sum over required time period
-    gpm_cube = get_data(sdate, edate, data_dir, obstype, acc_period)
+    gpm_cube = get_data(sdate, edate, data_dir, obstype, acc_period, mlead)
     print(gpm_cube)
     print("After fetching data...")
 
