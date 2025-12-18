@@ -17,6 +17,10 @@
         PT6H = """
             (get_data & get_gpm) => (process_analysis & process_periods) => run_series_analysis
         """
+        ## For running live, and ! before final cylce point in rose-suite.conf ##
+        ##PT6H = """
+        ##    @wall_clock => (get_data & get_gpm) => (process_analysis & process_periods) => run_series_analysis
+        ##"""
         #+PT6H/PT6H = """
         #    process_periods[-PT6H] => get_data
         #"""
@@ -65,6 +69,9 @@
             GPM_DATA_DIR={{GPM_DATA_DIR}}
             GPM_OBS_TYPE={{GPM_OBS_TYPE}}
             OUTPUT_DATA={{PROCESSED_DIR}}
+            CYLCING_ON={{CYLCING_ON}}
+            MAX_LEAD={{MAX_LEAD}}
+            ACCUM_PERIOD={{ACCUM_PERIOD}}
 
         [[[directives]]]
             --mem=10G

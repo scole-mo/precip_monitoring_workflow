@@ -1,4 +1,4 @@
-# module load scitools
+#!/usr/bin/env python3
 import argparse
 import datetime
 import dateutil.rrule
@@ -23,30 +23,25 @@ def parse_args():
                         help="Observation type (e.g. GPM, GPM_NRTlate")
     parser.add_argument("-o", "--outdir", default=os.getcwd(),
                         help="Directory to save output cubes (default: $PWD)")
-    parser.add_argument("--accum_period", default=24, type=int,
-                        help="Accumulation period to sum precipitation over (in hours,"
-                             " Defaults to 24).", dest='accum_period')
+    parser.add_argument("--accum_period", type=int,
+                        help="Accumulation period to sum precipitation over (in hours)", 
+                        dest='accum_period')
     parser.add_argument("--cutout",
                         nargs="*",
                         type=float,
                         default=None,
                         help=("Coordinates of subregion to cut out in the "
                               "form [min lon, max lon, min lat, max lat]."),
-                        dest="cutout")
-    parser.add_argument("--start_date",
-                        help="The start date i.e. YYYYMMDDHH")
-    parser.add_argument("--end_date",
-                        help="The end date i.e. YYYYMMDDHH")
+                        dest="cutout")                       
     parser.add_argument("-v", "--verbose", default=0,
                         help="Produce verbose output. Values 0-50")
-
+    parser.add_argument("--cycle_point", 
+                        help="Cycle point from workflow")
+    parser.add_argument("--max_lead", 
+                        type=int,
+                        help="Maximum lead time")
     parser.add_argument("-p", "--parallel", action="store_true",
                         help="Enable parallelism")
-    
-    parser.add_argument("--cycle_point", help="Cycle point from workflow")
-
-    parser.add_argument("--max_lead", help="Maximum lead time")
-                        
 
     # Parse the command line.
     args = parser.parse_args()
@@ -57,11 +52,8 @@ def parse_args():
     if not args.obs:
         raise argparse.ArgumentTypeError("Must specify an observation type.")
 
-    if not args.start_date:
-        raise argparse.ArgumentTypeError("Must specify a start date, format YYYYMMDDHH.")
-
-    if not args.end_date:
-        raise argparse.ArgumentTypeError("Must specify an end date, format YYYYMMDDHH.")
+    if not args.cycle_point:
+        raise argparse.ArgumentTypeError("Must specify a cycle_point.")
 
     return args
 
@@ -97,18 +89,16 @@ def insert_datetime(filename, date_time):
 
     return filename
 
-def generate_accumulation_periods(cycle_point, max_lead, accum_period):
-    end_forecast = cycle_point + datetime.timedelta(hours=max_lead)
-    current_start = cycle_point
-    
-    while current_start < end_forecast:
-        current_end = current_start + datetime.timedelta(hours=accum_period)
-        if current_end > end_forecast:
-            current_end = end_forecast
-        yield (current_start, current_end)
-        current_start = current_end
+def _increment_dt(start_datetime, end_datetime, interval):
+    '''
+    Increment datetime by given time interval (limited to integer hours)
+    '''
+    date_time = start_datetime
+    while date_time <= end_datetime:
+        yield min(date_time, end_datetime)
+        date_time += datetime.timedelta(hours=interval)
 
-def get_data(start_date, end_date, data_dir, gpm_type, accum_period, max_lead):
+def get_data(start_date, end_date, data_dir, gpm_type, accum_period):
     '''
     Retrieve requested GPM data type from internal MO netCDF-stored files.
     '''
@@ -122,9 +112,8 @@ def get_data(start_date, end_date, data_dir, gpm_type, accum_period, max_lead):
     # get the first end accumulation date/time
     end_date_0 = start_date + datetime.timedelta(hours=accum_period)
     # generate start and end accumulation datetimes
-    start_accumulations = generate_accumulation_periods(start_date, max_lead, accum_period)
-    end_accumulations = generate_accumulation_periods(end_date_0, max_lead, accum_period)
-    print(f"this is from GAP {list(next(start_accumulations))}")
+    start_accumulations = (_increment_dt(start_date, end_date, accum_period) for x in range(num_periods))
+    end_accumulations = (_increment_dt(end_date_0, end_date, accum_period) for x in range(num_periods))
 
     print(gpm_type)
     if gpm_type == 'GPM':
@@ -138,8 +127,6 @@ def get_data(start_date, end_date, data_dir, gpm_type, accum_period, max_lead):
     else:
         raise NotImplementedError("Can't currently process that category of GPM data: {}".format(gpm_type))
 
-    first_time_constraint = iris.Constraint(time=lambda cell: cell.bound[0] >= start_accumulations[0])
-    last_time_constraint = iris.Constraint(time=lambda cell: cell.bound[1] < end_accumulations[-1])
     first_day = start_date.replace(hour=0, minute=0, second=0)
     last_day = end_date.replace(hour=23, minute=59, second=59)
 
@@ -157,10 +144,6 @@ def get_data(start_date, end_date, data_dir, gpm_type, accum_period, max_lead):
         except OSError:
             continue
         gpm_cubes.append(gpm_cube)
-#    for cube in gpm_cubes:
-#        print(cube)
-#        print(cube.coord('time'))
-#    print(gpm_cubes)
 
     # now concatenate cubes together (should only be time axis differing at previous step)
     gpm_cube = gpm_cubes.concatenate_cube()
@@ -202,58 +185,65 @@ def main():
 
     #First, deal with arguments
     args = parse_args()
+    out_dir = args.outdir
+    acc_period = args.accum_period
+    ## Create output directory if it doesn't exist
+    period_outdir = os.path.join(out_dir, f"{acc_period}_hour_gpm")
+    os.makedirs(period_outdir, exist_ok=True)
+
     if args.cutout:
         cutout = args.cutout
     else:
         cutout = None
     data_dir = args.datadir
-    out_dir = args.outdir
     obstype = args.obs
-    acc_period = args.accum_period
-    mlead = args.max_lead
-    print(f"Max lead time is {mlead}")
-    mlead = int(mlead)
+    cycle_point = datetime.datetime.strptime(args.cycle_point, '%Y%m%dT%H%MZ')
+    lead = args.max_lead
 
-    ## Create output directory if it doesn't exist
-    period_outdir = os.path.join(out_dir, f"{acc_period}_hour_gpm")
-    os.makedirs(period_outdir, exist_ok=True)
+    START_ACCUM_DATE_DT = cycle_point
+    START_ACCUM_DATE_STR = cycle_point.strftime('%Y%m%d%H') 
+    print(f"START_ACCUM_DATE: {START_ACCUM_DATE_STR}")
+    END_ACCUM_DATE_DT = cycle_point + datetime.timedelta(hours=lead)
+    END_ACCUM_DATE_STR = END_ACCUM_DATE_DT.strftime('%Y%m%d%H')
+    print(f"END_ACCUM_DATE: {END_ACCUM_DATE_STR}")
+    i = START_ACCUM_DATE_DT
 
-    sdate = datetime.datetime.strptime(args.start_date, '%Y%m%d%H')
-    edate = datetime.datetime.strptime(args.end_date, '%Y%m%d%H')
+    while i < END_ACCUM_DATE_DT:
 
-    if obstype == "GPM":
-        obs_label = 'final'
-    elif obstype == 'GPM_NRTlate':
-        obs_label = 'late'
-    else:
-        obs_label = obstype
+        sdate = i
+        edate = i + datetime.timedelta(hours=acc_period)
+        print(f"sdate, edate: {sdate, edate}")
 
-    # fetch gpm data and sum over required time period
-    gpm_cube = get_data(sdate, edate, data_dir, obstype, acc_period, mlead)
-    print(gpm_cube)
-    print("After fetching data...")
+        # fetch gpm data and sum over required time period
+        gpm_cube = get_data(sdate, edate, data_dir, obstype, acc_period)
+        print(gpm_cube)
+        print("After fetching data...")
 
-    # extract over subregion, if required
-    if cutout:
-        print("Trimming data to sub-region {}".format(cutout))
-        lons = (cutout[0], cutout[1])
-        lats = (cutout[2], cutout[3])
-        gpm_cube = gpm_cube.intersection(longitude=lons, latitude=lats)
-    else:
-        print("No cutout requested. Using global data!")
+        # extract over subregion, if required
+        if cutout:
+            print("Trimming data to sub-region {}".format(cutout))
+            lons = (cutout[0], cutout[1])
+            lats = (cutout[2], cutout[3])
+            gpm_cube = gpm_cube.intersection(longitude=lons, latitude=lats)
+        else:
+            print("No cutout requested. Using global data!")
 
-    # now save cube to netCDF
-    for this_time in gpm_cube.slices_over('time'):
-        time_coord = this_time.coord('time')
-        slice_time = time_coord.units.num2date(time_coord.bounds[-1][-1])
-        start_acc_time = time_coord.units.num2date(time_coord.bounds[-1][0]).strftime('%Y%m%d%H')
-        end_acc_time = (slice_time + datetime.timedelta(seconds=1)).strftime('%Y%m%d%H')
-        print(start_acc_time)
-        print(end_acc_time)
-        outf = os.path.join(out_dir,'gpm_{}_{}.nc'.format(start_acc_time, end_acc_time))
-        print("Saving to {} ...".format(outf))
-        iris.save(this_time, outf, fill_value=np.nan)
+        # now save cube to netCDF
+        for this_time in gpm_cube.slices_over('time'):
+            time_coord = this_time.coord('time')
+            slice_time = time_coord.units.num2date(time_coord.bounds[-1][-1])
+            start_acc_time = time_coord.units.num2date(time_coord.bounds[-1][0]).strftime('%Y%m%d%H')
+            end_acc_time = (slice_time + datetime.timedelta(seconds=1)).strftime('%Y%m%d%H')
+            print(start_acc_time)
+            print(end_acc_time)
+            outf = os.path.join(period_outdir,'gpm_{}_{}.nc'.format(start_acc_time, end_acc_time))
+            print("Saving to {} ...".format(outf))
+            iris.save(this_time, outf, fill_value=np.nan)
+
+        # Move on to next 6h period
+        i = i + datetime.timedelta(hours=acc_period)
+        print(f"onto next i.. {i}")
 
 if __name__ == "__main__":
-    iris.FUTURE.save_split_attrs = True
+    #iris.FUTURE.save_split_attrs = True
     main()
