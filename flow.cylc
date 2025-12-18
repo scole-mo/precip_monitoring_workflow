@@ -15,17 +15,21 @@
 
    [[graph]]
         PT6H = """
-            get_data => get_gpm => process_analysis => process_periods 
+            (get_data & get_gpm) => (process_analysis & process_periods) => run_series_analysis
         """
-        +PT6H/PT6H = """
-            process_periods[-PT6H] => get_data
-        """
+        ## For running live, and ! before final cylce point in rose-suite.conf ##
+        ##PT6H = """
+        ##    @wall_clock => (get_data & get_gpm) => (process_analysis & process_periods) => run_series_analysis
+        ##"""
+        #+PT6H/PT6H = """
+        #    process_periods[-PT6H] => get_data
+        #"""
         ##PT24H = """
       # ##     process_periods => run_series_analysis
        ## """
     {% if FINAL_CYCLE_POINT | default(False) %}
         R1/{{FINAL_CYCLE_POINT}} = """
-            process_periods => run_series_analysis
+            run_series_analysis
         """
     {% endif %}
 
@@ -65,6 +69,9 @@
             GPM_DATA_DIR={{GPM_DATA_DIR}}
             GPM_OBS_TYPE={{GPM_OBS_TYPE}}
             OUTPUT_DATA={{PROCESSED_DIR}}
+            CYLCING_ON={{CYLCING_ON}}
+            MAX_LEAD={{MAX_LEAD}}
+            ACCUM_PERIOD={{ACCUM_PERIOD}}
 
         [[[directives]]]
             --mem=10G
@@ -111,6 +118,7 @@
             ACCUM_DATA_DIR={{PROCESSED_DIR}}
             DATADIR={{DATA_DIR}}
             OUTPUT_BASE={{OUTPUT_BASE}}
+            AREA_MASKS={{AREA_MASKS}}
 
         [[[directives]]]
 		--mem = 20G
