@@ -69,7 +69,7 @@
             GPM_DATA_DIR={{GPM_DATA_DIR}}
             GPM_OBS_TYPE={{GPM_OBS_TYPE}}
             OUTPUT_DATA={{PROCESSED_DIR}}
-            CYLCING_ON={{CYLCING_ON}}
+            CYCLING_ON={{CYCLING_ON}}
             MAX_LEAD={{MAX_LEAD}}
             ACCUM_PERIOD={{ACCUM_PERIOD}}
 

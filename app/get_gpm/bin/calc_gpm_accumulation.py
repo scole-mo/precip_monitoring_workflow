@@ -42,6 +42,8 @@ def parse_args():
                         help="Maximum lead time")
     parser.add_argument("-p", "--parallel", action="store_true",
                         help="Enable parallelism")
+    parser.add_argument("--cycling_on", type=str,
+                        help="Flag to indicate running on VT or DT within cylc")
 
     # Parse the command line.
     args = parser.parse_args()
@@ -190,6 +192,7 @@ def main():
     ## Create output directory if it doesn't exist
     period_outdir = os.path.join(out_dir, f"{acc_period}_hour_gpm")
     os.makedirs(period_outdir, exist_ok=True)
+    cycling_on = args.cycling_on # flag to indicate running on VT or DT within cycl
 
     if args.cutout:
         cutout = args.cutout
@@ -200,13 +203,27 @@ def main():
     cycle_point = datetime.datetime.strptime(args.cycle_point, '%Y%m%dT%H%MZ')
     lead = args.max_lead
 
-    START_ACCUM_DATE_DT = cycle_point
-    START_ACCUM_DATE_STR = cycle_point.strftime('%Y%m%d%H') 
-    print(f"START_ACCUM_DATE: {START_ACCUM_DATE_STR}")
-    END_ACCUM_DATE_DT = cycle_point + datetime.timedelta(hours=lead)
-    END_ACCUM_DATE_STR = END_ACCUM_DATE_DT.strftime('%Y%m%d%H')
-    print(f"END_ACCUM_DATE: {END_ACCUM_DATE_STR}")
-    i = START_ACCUM_DATE_DT
+    print(f"We are cycling on {cycling_on}")
+
+    if cycling_on == 'DT':
+        START_ACCUM_DATE_DT = cycle_point
+        START_ACCUM_DATE_STR = cycle_point.strftime('%Y%m%d%H') 
+        print(f"START_ACCUM_DATE: {START_ACCUM_DATE_STR}")
+        END_ACCUM_DATE_DT = cycle_point + datetime.timedelta(hours=lead)
+        END_ACCUM_DATE_STR = END_ACCUM_DATE_DT.strftime('%Y%m%d%H')
+        print(f"END_ACCUM_DATE: {END_ACCUM_DATE_STR}")
+        i = START_ACCUM_DATE_DT
+    elif cycling_on == 'VT':
+        END_ACCUM_DATE_DT = cycle_point
+        END_ACCUM_DATE_STR = cycle_point.strftime('%Y%m%d%H')
+        print(f"END_ACCUM_DATE: {END_ACCUM_DATE_STR}")
+        START_ACCUM_DATE_DT = cycle_point - datetime.timedelta(hours=acc_period)
+        START_ACCUM_DATE_STR = START_ACCUM_DATE_DT.strftime('%Y%m%d%H')
+        print(f"START_ACCUM_DATE: {START_ACCUM_DATE_STR}")
+        i = START_ACCUM_DATE_DT
+    else:
+        print("Error: cycling_on flag must be set to either VT or DT")
+        sys.exit(1)
 
     while i < END_ACCUM_DATE_DT:
 
