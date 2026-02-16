@@ -1,0 +1,111 @@
+<div class="section" id="version">
+<h1>Version</h1>
+<table border="1" class="docutils">
+<colgroup>
+<col width="32%" />
+<col width="68%" />
+</colgroup>
+<thead valign="bottom">
+<tr><th class="head">Module</th>
+<th class="head">Version/Path</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr><td>VerPy Path:</td>
+<td>/home/users/clare.bysouth/frcb/VERSUS/r4416_749_METNetCDF/VerPy</td>
+</tr>
+<tr><td>VerPy Version:</td>
+<td>7.1</td>
+</tr>
+<tr><td>NumPy Version:</td>
+<td>1.26.4</td>
+</tr>
+<tr><td>Matplotlib Version:</td>
+<td>3.8.4</td>
+</tr>
+<tr><td>Scitools Version:</td>
+<td>environments/VerPyEnv</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="options">
+<h1>Options</h1>
+<table border="1" class="docutils">
+<colgroup>
+<col width="17%" />
+<col width="83%" />
+</colgroup>
+<thead valign="bottom">
+<tr><th class="head">Attribute</th>
+<th class="head">Value</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr><td>verbosity</td>
+<td>10</td>
+</tr>
+<tr><td>jobid</td>
+<td>20250128T0000Z_L72_gt1</td>
+</tr>
+<tr><td>plottheme</td>
+<td>&lt;VerPy plot theme: &quot;Plotheme: default&quot;&gt;</td>
+</tr>
+<tr><td>metadata</td>
+<td>example_viewer</td>
+</tr>
+<tr><td>output</td>
+<td>errormap</td>
+</tr>
+<tr><td>mapopts</td>
+<td>global</td>
+</tr>
+<tr><td>type</td>
+<td>ctc</td>
+</tr>
+<tr><td>system</td>
+<td>MET</td>
+</tr>
+<tr><td>source</td>
+<td>/data/scratch/sebastian.cole/global_precip_stand_alone/20250128T0000Z/GPM_24hr_V20250128T0000Z_L72.nc</td>
+</tr>
+<tr><td>params</td>
+<td>['6hr Precipitation Accumulation (mm)']</td>
+</tr>
+<tr><td>stats</td>
+<td>['Hits', 'False Alarms', 'Misses', 'Correct Rejections']</td>
+</tr>
+<tr><td>thresh</td>
+<td>['&gt;1']</td>
+</tr>
+</tbody>
+</table>
+<p>Data instance:</p>
+<pre class="literal-block">
+params: ['6hr Precipitation Accumulation (mm)']
+thresh: ['&gt;1']
+stats: ['Hits', 'Misses', 'False Alarms', 'Correct Rejections']
+yc: [0, 1, ..., 1918, 1919]
+xc: [0, 1, ..., 2558, 2559]
+fcrs: ['7200.0']
+dates: ['20250128 00:00']
+</pre>
+<p>Data has been modified.</p>
+<p>Data instance:</p>
+<pre class="literal-block">
+params: ['6hr Precipitation Accumulation (mm)']
+thresh: ['&gt;1']
+stats: ['Hits', 'False Alarms', 'Misses', 'Correct Rejections']
+yc: [0, 1, ..., 1918, 1919]
+xc: [0, 1, ..., 2558, 2559]
+fcrs: ['7200.0']
+dates: ['20250128 00:00']
+</pre>
+</div>
+<div class="section" id="verpy-errormap">
+<h1>VerPy.errormap</h1>
+<p>Creating 1 plots, with 1 per page, resulting in 1 landscape pages. Title: 6hr Precipitation Accumulation, &gt;1mm, Hits, T+72, 20250128 00:00, Surface Obs, MO_GLOBAL</p>
+<p>Creating 1 plots, with 1 per page, resulting in 1 landscape pages. Title: 6hr Precipitation Accumulation, &gt;1mm, False Alarms, T+72, 20250128 00:00, Surface Obs, MO_GLOBAL</p>
+<p>Creating 1 plots, with 1 per page, resulting in 1 landscape pages. Title: 6hr Precipitation Accumulation, &gt;1mm, Misses, T+72, 20250128 00:00, Surface Obs, MO_GLOBAL</p>
+<p>Creating 1 plots, with 1 per page, resulting in 1 landscape pages. Title: 6hr Precipitation Accumulation, &gt;1mm, Correct Rejections, T+72, 20250128 00:00, Surface Obs, MO_GLOBAL</p>
+</div>

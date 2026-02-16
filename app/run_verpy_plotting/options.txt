@@ -1,0 +1,1 @@
+[{'jobid': '20250128T0000Z_L72_gt1', 'metadata': 'example_viewer', 'param': (77, 129, 0), 'type': 'ctc', 'thresh': '>1', 'stats': [7921, 7922, 7923, 7924], 'source': '/data/scratch/sebastian.cole/global_precip_stand_alone/20250128T0000Z/GPM_24hr_V20250128T0000Z_L72.nc', 'system': 'MET', 'output': 'errormap', 'mapopts': ['global']}]
