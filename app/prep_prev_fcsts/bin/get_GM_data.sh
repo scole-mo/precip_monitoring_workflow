@@ -5,37 +5,61 @@ datadir=$2
 max_lead=$3
 accum_period=$4
 
-fcst_date=$(isodatetime -u $input_date --offset -PT${max_lead}H --print-format=%Y%m%dT%H%MZ)
+x=60
+
+# Adjust accum_period if it's 24
+if [[ "$accum_period" == "24" ]]; then
+   x=144
+fi
+
+# This is offsetting BACKWARD from input_date, then FORWARD by accum_period
+# For 6hr at 20250126T0600Z:
+#   fcst_date = 20250126T0600Z - 60H = 20250123T1800Z (WRONG!)
+#   input_date = 20250126T0600Z + 6H = 20250126T1200Z
+# This doesn't make sense for your use case
+
+# BETTER APPROACH: Don't offset input_date forward
+fcst_date=$(isodatetime -u $input_date --offset -PT${max_lead}H --print-format=%Y%m%d%H%M)
+# Keep input_date as-is (it's already the valid time you want)
+# input_date stays as input_date
 
 # Loop from fcst_date to input_date at intervals of accum_period
 current_date=$fcst_date
 echo "Getting GM data from ${fcst_date} to ${input_date} at ${accum_period}-hour intervals."
 
-while [[ $(isodatetime -u $current_date --as-total=s) -lt $(isodatetime -u $input_date --as-total=s) ]]; do
-    
-    year=${current_date:0:4}
-    date=${current_date:0:8}
-    hour=${current_date:9:2}
+while [[ $current_date -le $input_date ]]; do
 
-    
     year=${current_date:0:4}
     date=${current_date:0:8}
-    hour=${current_date:9:2}
+    hour=${current_date:8:2}
+
+    echo "hour: $hour"
+
+    echo isodatetime -u $current_date
+
+    save_current_date=${date}T${hour}00Z
+    echo "Save current date is: ${save_current_date}"
 
     ### Determine lead times based on forecast hour ###
 
     if [[ "$hour" == "00" || "$hour" == "12" ]]; then
-        leads_end='6'
+        leads_end=$max_lead
     else
-        leads_end='6'
+        leads_end=$max_lead
     fi
 
     ## Define times for global update analysis - only 000 and 006 available ##
     analysis_runs=("000" "006")
 
+    i=0
+
+    if [[ "$accum_period" == "24" && "$hour" == "12" ]]; then
+        echo "Accumulation period is 24 and hour is 12, starting leads at 12"
+        i=$hour
+    fi
     ### Get leads based on accum_period ###
     leads=""
-    for ((i=0; i<=leads_end; i+=accum_period)); do
+    for ((; i<=leads_end; i+=accum_period)); do
         leads="${leads}${i} "
     done
     leads=$(echo $leads)  # Remove trailing space if needed
@@ -53,7 +77,7 @@ while [[ $(isodatetime -u $current_date --as-total=s) -lt $(isodatetime -u $inpu
     end
 EOF
 
-      moo select -I query moose:/opfc/atm/global/prods/${year}.pp/ ${datadir}/${accum_period}_hour/${current_date}_gl-up_${analysis}.pp
+      moo select -I query moose:/opfc/atm/global/prods/${year}.pp/ ${datadir}/${accum_period}_hour/${save_current_date}_gl-up_${analysis}.pp
       rm query
     }
 
@@ -73,7 +97,7 @@ EOF
       end
 EOF
 
-    moo select -I query moose:/opfc/atm/global/prods/${year}.pp/ ${datadir}/${accum_period}_hour/${current_date}_gl-mn_T${this_lead}.pp
+    moo select -I query moose:/opfc/atm/global/prods/${year}.pp/ ${datadir}/${accum_period}_hour/${save_current_date}_gl-mn_T${this_lead}.pp
     rm query
     }
 
@@ -89,18 +113,33 @@ EOF
     for lead in $leads
     do
       this_lead=$(printf "%03d" ${lead})
-      echo ${this_lead}
-      file_to_cat="${datadir}/${accum_period}_hour/${current_date}_gl-mn_T${this_lead}.pp"
-      list_of_files=$(echo ${list_of_files} "${file_to_cat} ")
+      echo "Processing lead time: ${this_lead}"
+      file_to_cat="${datadir}/${accum_period}_hour/${save_current_date}_gl-mn_T${this_lead}.pp"
+      list_of_files="${list_of_files} ${file_to_cat}"
       mass-pull-accum
     done
 
     accum=$(printf "%03d" $accum_period)
-    echo "cat $list_of_files > ${datadir}/${accum_period}_hour/${current_date}_gl-mn_${accum}.pp"
-    cat $list_of_files > ${datadir}/${accum_period}_hour/${current_date}_gl-mn_${accum}.pp
+    echo "Concatenating files: $list_of_files"
+    echo "cat $list_of_files > ${datadir}/${accum_period}_hour/${save_current_date}_gl-mn_${accum}.pp"
+    cat $list_of_files > ${datadir}/${accum_period}_hour/${save_current_date}_gl-mn_${accum}.pp
+    
+    if [ $? -ne 0 ]; then
+        echo "ERROR: cat command failed"
+        echo "Files to concatenate:"
+        for f in $list_of_files; do
+            if [ -f "$f" ]; then
+                echo "  EXISTS: $f ($(stat -c%s $f) bytes)"
+            else
+                echo "  MISSING: $f"
+            fi
+        done
+        exit 1
+    fi
 
     # Move to next time step
-    current_date=$(isodatetime -u $current_date --offset PT${accum_period}H --print-format=%Y%m%dT%H%MZ)
+    echo current_date=${current_date}
+    current_date=$(isodatetime -u $current_date --parse-format=%Y%m%d%H%M --offset PT${accum_period}H --print-format=%Y%m%d%H%M)
     echo "Next time step: ${current_date}"
     
 done

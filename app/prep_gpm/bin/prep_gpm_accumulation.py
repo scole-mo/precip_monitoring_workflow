@@ -165,7 +165,7 @@ def get_data(start_date, end_date, data_dir, gpm_type, accum_period):
 
         # GPM fields are in mm/hr units for each half-hourly field
         gpm_sum = time_limited_gpm_cube.collapsed('time', iris.analysis.SUM) / 2.
-        gpm_sum.rename('Precipitation Amount')
+        gpm_sum.rename('precipitation amount')
         gpm_sum.units = cf_units.Unit('mm')
         print(gpm_sum)
         gpm_acc.append(gpm_sum)

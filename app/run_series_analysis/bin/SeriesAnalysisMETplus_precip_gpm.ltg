@@ -26,7 +26,7 @@ INIT_BEG={ENV[START_CYCLE_POINT]}
 # End time for METplus run - must match INIT_TIME_FMT
 INIT_END={ENV[FINAL_CYCLE_POINT]}
 
-SERIES_ANALYSIS_RUNTIME_FREQ = RUN_ONCE_PER_LEAD
+SERIES_ANALYSIS_RUNTIME_FREQ = RUN_ONCE_FOR_EACH
 
 # Increment between METplus runs (in seconds if no units are specified)
 #  Must be >= 60 seconds

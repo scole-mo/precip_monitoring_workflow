@@ -6,6 +6,7 @@ import oemplotlib
 from oemplotlib.cube_utils import running_accum_to_period, fix_running_cube_time, separate_realization_time
 import argparse
 from datetime import datetime, timedelta
+#iris.FUTURE.save_split_attrs = True
 
 logging.basicConfig()
 LOGGER = logging.getLogger(__name__)
@@ -16,8 +17,10 @@ def parse_args():
     parser.add_argument("--datetime", required=True)
     parser.add_argument("--datadir", required=True)
     parser.add_argument("--outdir", required=True)
+    parser.add_argument("--prep_hours", type=int)
     parser.add_argument("--trial1")
     parser.add_argument("--trial2")
+    parser.add_argument("--accum_period", type=int, required=True)
     args = parser.parse_args()
     return args
 
@@ -134,6 +137,7 @@ class Precip_accumulations_large_scale:
                 "plot_rain_amnt: Error accumulating rain for %s period, skipping",
                 period_hrs,
             )
+            raise
 
         return accum_rain
 
@@ -237,6 +241,7 @@ class Precip_accumulations_convective:
                     "plot_rain_amnt: Error accumulating rain for %s period, skipping",
                     period_hrs,
                 )
+                raise
 
             return accum_rain
     
@@ -335,16 +340,39 @@ def main():
     dt = args.datetime
     datadir = args.datadir
     output_dir = args.outdir
+    prep = args.prep_hours
+    accum = args.accum_period
     LOGGER.info(f" DATETIME: {dt}")
     LOGGER.info(f" DATADIR: {datadir}")
     LOGGER.info(f" OUTDIR: {output_dir}")
-    
-    accum_periods = [6, 24]
+    LOGGER.info(f" PREP_HOURS: {prep}")
+    LOGGER.info(f" ACCUM_PERIOD: {accum}")
 
-    for accum in accum_periods:
+    #accum_periods = [accum]
+
+    ##for accum in accum_periods:
+    # Determine which datetimes to process
+    if prep and prep > 0:
+        # Generate list of datetimes from (dt - prep_hours) to dt at intervals
+        end_dt = datetime.strptime(dt, "%Y%m%dT%H%MZ")
+        start_dt = end_dt - timedelta(hours=(prep))  # start time is prep hours plus accumulation period before the main datetime
+        datetimes_to_process = []
+        current_dt = start_dt
+        while current_dt <= end_dt:
+            datetimes_to_process.append(current_dt.strftime("%Y%m%dT%H%MZ"))
+            current_dt += timedelta(hours=accum) ## incerement by prep hours but may need to change this section to be in loop of accums in accum periods
+        LOGGER.info(f"Processing datetimes: {datetimes_to_process}")
+    else:
+        # Just process the single datetime
+        datetimes_to_process = [dt]
+
+    for process_dt in datetimes_to_process:
+        LOGGER.info(f"Processing datetime: {process_dt}")
+        
+        #for accum in accum_periods:
 
         val = accum 
-        file = f"{datadir}/{accum}_hour/{dt}_gl-mn_{accum:03d}.pp"
+        file = f"{datadir}/{accum}_hour/{process_dt}_gl-mn_{accum:03d}.pp"
         #print(f"This is file_to_read: {filepath}")
 
         #cubes_to_read = iris.load(filepath)
@@ -359,28 +387,93 @@ def main():
         lsr_accumulations = lsr_precip.get_cube_accumulations(accum)
         conv_accumulations = conv_precip.get_cube_accumulations(accum)
 
-        total_accumulations = lsr_accumulations.copy()
-        total_accumulations.long_name = "Total_Precip_Accumulation"
-        
-        total_data = lsr_accumulations.data + conv_accumulations.data
-        total_accumulations.data = total_data
+        total_accumulations = lsr_accumulations + conv_accumulations
+        total_accumulations.long_name = "precipitation_amount"
 
-        init_time = datetime.strptime(dt, "%Y%m%dT%H%MZ")  # adjust format as needed
+        init_time = datetime.strptime(process_dt, "%Y%m%dT%H%MZ")  # adjust format as needed
         lead_hours = accum  # or use your lead time variable
         valid_time = init_time + timedelta(hours=accum)
+        print(f"init_time: {init_time}, lead_hours: {lead_hours}, valid_time: {valid_time}")
 
         total_accumulations.attributes['valid_time'] = valid_time.strftime("%Y%m%dT%H%MZ")
 
-        total_path_to_save = f"{output_dir}/{dt}_{accum}hr_accums.nc"
-        lsr_path_to_save = f"{output_dir}/{dt}_{accum}hr_lsr_accums.nc"
-        conv_path_to_save = f"{output_dir}/{dt}_{accum}hr_conv_accums.nc"
-        # iris.save(lsr_accumulations, lsr_path_to_save)
-        # iris.save(conv_accumulations, conv_path_to_save)
-        iris.save(total_accumulations, total_path_to_save)
-        # print(f"LARGE SCALE PRECIP: {lsr_accumulations}")
-        # print("*********************************************")
-        # print(f"CONVECTIVE PRECIP: {conv_accumulations}")
+        # ADDED: Diagnostic logging to check time coordinates
+        time_coord = total_accumulations.coord('time')
+        if time_coord:
+            LOGGER.info(f"Time coordinate points: {time_coord.points}")
+            LOGGER.info(f"Time coordinate bounds: {time_coord.bounds if time_coord.has_bounds() else 'None'}")
+
+
+        total_accumulations.long_name = "precipitation_amount"
+
+        init_time = datetime.strptime(process_dt, "%Y%m%dT%H%MZ")  # adjust format as needed
+        lead_hours = accum  # or use your lead time variable
+        valid_time = init_time + timedelta(hours=accum)
+        print(f"init_time: {init_time}, lead_hours: {lead_hours}, valid_time: {valid_time}")
+
+        # REMOVED: Don't set valid_time as global attribute here
+        # total_accumulations.attributes['valid_time'] = valid_time.strftime("%Y%m%dT%H%MZ")
+
+        # ADDED: Diagnostic logging to check time coordinates
+        time_coord = total_accumulations.coord('time')
+        if time_coord:
+            LOGGER.info(f"Time coordinate points: {time_coord.points}")
+            LOGGER.info(f"Time coordinate bounds: {time_coord.bounds if time_coord.has_bounds() else 'None'}")
+            LOGGER.info(f"Time coordinate shape: {time_coord.shape}")
+
+        # NEW: Split by time and save each valid time separately (like analysis files)
+        if time_coord and time_coord.shape[0] > 1:
+            LOGGER.info(f"Splitting cube with {time_coord.shape[0]} time steps into separate files")
+            
+            # Iterate over each time slice
+            for time_slice in total_accumulations.slices_over('time'):
+                # Extract the valid time for this slice
+                slice_time_coord = time_slice.coord('time')
+                slice_valid_time = slice_time_coord.units.num2date(slice_time_coord.points[0])
+                
+                # Remove the time dimension to match analysis file structure
+                sliced_cube = iris.util.squeeze(time_slice)
+                
+                # Set the valid_time attribute for this specific slice
+                sliced_cube.attributes['valid_time'] = slice_valid_time.strftime("%Y%m%dT%H%MZ")
+                
+                # Generate filename with valid time prefix (like analysis files)
+                file_to_save = f"{output_dir}/VT{slice_valid_time.strftime('%Y%m%dT%H%MZ')}_I{process_dt}_{accum}hr_accums.nc"
+                
+                LOGGER.info(f"Saving {file_to_save}")
+                LOGGER.info(f"Cube shape: {sliced_cube.shape} (should be 2D: lat, lon)")
+                
+                iris.save(sliced_cube, file_to_save)
+                
+        else:
+            # Single time step - remove time dimension
+            LOGGER.info("Single time step detected, removing time dimension")
+            squeezed_cube = iris.util.squeeze(total_accumulations)
+            
+            # Set the valid_time attribute
+            squeezed_cube.attributes['valid_time'] = valid_time.strftime("%Y%m%dT%H%MZ")
+            
+            # Generate filename with valid time prefix
+            file_to_save = f"{output_dir}/VT{valid_time.strftime('%Y%m%dT%H%MZ')}_I{process_dt}_{accum}hr_accums.nc"
+            
+            LOGGER.info(f"Saving {file_to_save}")
+            LOGGER.info(f"Cube shape: {squeezed_cube.shape} (should be 2D: lat, lon)")
+            
+            iris.save(squeezed_cube, file_to_save)
+
+        # REMOVED: Old single-file save
+        # total_path_to_save = f"{output_dir}/{process_dt}_{accum}hr_accums.nc"
+        # lsr_path_to_save = f"{output_dir}/{process_dt}_{accum}hr_lsr_accums.nc"
+        # conv_path_to_save = f"{output_dir}/{process_dt}_{accum}hr_conv_accums.nc"
+        # iris.save(total_accumulations, total_path_to_save)
+
         print(f"TOTAL PRECIP: {total_accumulations}")
+
+        #total_path_to_save = f"{output_dir}/{process_dt}_{accum}hr_accums.nc"
+
+
+        #iris.save(total_accumulations, total_path_to_save)
+
     
     # TRIAL OPTIONS
     # trial_file1 = f"/<path>/PS47/PS47_thresholdplot_data/{cube_dt}_{trial_name1}.pp"
