@@ -1,0 +1,14 @@
+#!/bin/bash -l
+#
+# Usage scitool-run CMD_WITHOPTS
+#
+# ENVIRONMENT
+#   VERPY_PATH   The version of the software stack you want to run
+
+module use /data/users/cfsb/modulefiles
+
+export VERPY_DIR='/home/users/clare.bysouth/frcb/VERSUS/r4416_749_METNetCDF'
+
+module load verpy/developer
+
+exec "$@"

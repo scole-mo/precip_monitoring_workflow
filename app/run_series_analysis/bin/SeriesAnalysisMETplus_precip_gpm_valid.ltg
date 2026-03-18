@@ -12,32 +12,38 @@ PROCESS_LIST = SeriesAnalysis
 #   INIT_TIME_FMT, INIT_BEG, INIT_END, and INIT_INCREMENT must also be set
 # If set to VALID or REALTIME:
 #   VALID_TIME_FMT, VALID_BEG, VALID_END, and VALID_INCREMENT must also be set
-LOOP_BY = INIT
+LOOP_BY = VALID
 
 # Format of INIT_BEG and INT_END using % items
 # %Y = 4 digit year, %m = 2 digit month, %d = 2 digit day, etc.
 # see www.strftime.org for more information
 # %Y%m%d%H expands to YYYYMMDDHH
-INIT_TIME_FMT = %Y%m%dT%H%MZ
+VALID_TIME_FMT = %Y%m%dT%H%MZ
 
 # Start time for METplus run - must match INIT_TIME_FMT
-INIT_BEG={ENV[START_CYCLE_POINT]}
+VALID_BEG={ENV[CYLC_TASK_CYCLE_POINT]}
 
 # End time for METplus run - must match INIT_TIME_FMT
-INIT_END={ENV[FINAL_CYCLE_POINT]}
+VALID_END={ENV[CYLC_TASK_CYCLE_POINT]}
 
-SERIES_ANALYSIS_RUNTIME_FREQ = RUN_ONCE_FOR_EACH
+SERIES_ANALYSIS_RUNTIME_FREQ = RUN_ONCE_PER_LEAD
 
 # Increment between METplus runs (in seconds if no units are specified)
 #  Must be >= 60 seconds
-INIT_INCREMENT = 6H 
+##VALID_INCREMENT = {ENV[ACCUM_PERIOD]}H  
 
 SERIES_ANALYSIS_BLOCK_SIZE = 5160960
 
 # List of forecast leads to process for each run time (init or valid)
 # In hours if units are not specified
 # If unset, defaults to 0 (don't loop through forecast leads)
-LEAD_SEQ = begin_end_incr(6,18,6)
+LEAD_SEQ=begin_end_incr({ENV[LEAD_SEQ]})
+
+## For potential running on run once per init or valid
+#LEAD_SEQ_1 = begin_end_incr({ENV[LEAD_SEQ1]})
+#LEAD_SEQ_1_LABEL = {ENV[LEAD_SEQ_1_LABEL]}
+#LEAD_SEQ_2 = begin_end_incr({ENV[LEAD_SEQ2]})
+#LEAD_SEQ_2_LABEL = {ENV[LEAD_SEQ_2_LABEL]}
 
 # list of strings to loop over to run SeriesAnalysis multiple times for a
 # given run time. Each item can be referenced using the filename template
@@ -56,24 +62,31 @@ SERIES_ANALYSIS_CUSTOM_LOOP_LIST =
 LOOP_ORDER = processes
 
 # Verbosity of MET output - overrides LOG_VERBOSITY for SeriesAnalysis only
-LOG_SERIES_ANALYSIS_VERBOSITY = 2
+LOG_SERIES_ANALYSIS_VERBOSITY = 3
 
 # set to True to add the -paired flag to the SeriesAnalysis command
 SERIES_ANALYSIS_IS_PAIRED = FALSE
 
 # Location of MET config file to pass to SeriesAnalysis
 # References CONFIG_DIR from the [dir] section
-#SERIES_ANALYSIS_CONFIG_FILE = 
+#SERIES_ANALYSIS_CONFIG_FILE =
+
+# Path to existing Series-Analysis output file to aggregate with
+# Aggregates partial sums (SL1L2, SAL1L2) and contingency table counts (CTC, MCTC, PCT)
+# Leave commented out if not using aggregation
+#SERIES_ANALYSIS_AGGR_FILE = {ENV[MET_OUTPUT_DIR]}/series_analysis_aggr_file_gpm.nc
 
 # list of statistics to generate with SeriesAnalysis
 
-SERIES_ANALYSIS_CAT_THRESH = [>0.1, >1, >4, >8, >16, >30, >50, >75, >100]
-SERIES_ANALYSIS_STAT_LIST = [TOTAL, FBAR, OBAR, RMSE, MBIAS, MAE, ME, ESTDEV, FSTDEV, OSTDEV, BCMSE]
-SERIES_ANALYSIS_OUTPUT_STATS_CTS = [FBIAS, GSS];
-SERIES_ANALYSIS_OUTPUT_STATS_CTC = ["TOTAL", "FY_OY", "FY_ON", "FN_OY", "FN_ON"];
+#SERIES_ANALYSIS_CAT_THRESH = [>0.1, >1, >4, >8, >16, >30, >50, >75, >100]
+#SERIES_ANALYSIS_STAT_LIST = [TOTAL, FBAR, OBAR, RMSE, MBIAS, MAE, ME, ESTDEV, FSTDEV, OSTDEV, BCMSE]
+#SERIES_ANALYSIS_OUTPUT_STATS_CTS = [FBIAS, GSS];
+#SERIES_ANALYSIS_OUTPUT_STATS_CTC = [TOTAL, FY_OY, FY_ON, FN_OY, FN_ON];
+SERIES_ANALYSIS_OUTPUT_STATS_SL1L2 = [TOTAL, FBAR, OBAR, MAE]
 
 # Specify area masks for verification areas
 ##SERIES_ANALYSIS_MASK_POLY = {ENV[AREA_MASKS]}
+##SERIES_ANALYSIS_MASK_GRID = FULL
 
 # grid to remap data. Value is set as the 'to_grid' variable in the 'regrid' dictionary
 # See MET User's Guide for more information
@@ -91,8 +104,9 @@ OBTYPE = GPM
 
 #### FIELDS ####
 
-FCST_VAR1_NAME = total_precip_accumulation
-FCST_VAR1_LEVELS = "({valid?fmt=%Y%m%d%H},*,*)"
+FCST_VAR1_NAME = precipitation_amount
+##FCST_VAR1_LEVELS = "({valid?fmt=%Y%m%d%H},*,*)"
+FCST_VAR1_LEVELS = "(*,*)"
 
 OBS_VAR1_NAME = precipitation_amount
 OBS_VAR1_LEVELS = "(*,*)"
@@ -111,7 +125,7 @@ OUTPUT_BASE={ENV[OUTPUT_BASE]}
 MET_INSTALL_DIR=/data/users/cfver/METBuild/MET12.1.0
 
 # directory to write output from SeriesAnalysis
-SERIES_ANALYSIS_OUTPUT_DIR = /data/scratch/sebastian.cole/global_precip_stand_alone/
+SERIES_ANALYSIS_OUTPUT_DIR = {ENV[MET_OUTPUT_DIR]}
 
 SERIES_ANALYSIS_REGRID_WIDTH = 2
 SERIES_ANALYSIS_REGRID_METHOD = BUDGET
@@ -124,9 +138,9 @@ SERIES_ANALYSIS_REGRID_TO_GRID = FCST
 # Template to look for forecast input to SeriesAnalysis relative to FCST_SERIES_ANALYSIS_INPUT_DIR
 # The following template uses begin_end_incr() syntax to generate the following list:
 
-FCST_SERIES_ANALYSIS_INPUT_TEMPLATE ={init?fmt=%Y%m%dT%2H}00Z_6hr_accums.nc
+FCST_SERIES_ANALYSIS_INPUT_TEMPLATE = VT{valid?fmt=%Y%m%dT%2H}00Z_I{init?fmt=%Y%m%dT%2H}00Z_{ENV[ACCUM_PERIOD]}hr_accums.nc
 
-OBS_SERIES_ANALYSIS_INPUT_TEMPLATE = 6_hour_gpm/gpm_*_{valid?fmt=%Y%m%d%H}.nc
+OBS_SERIES_ANALYSIS_INPUT_TEMPLATE = {ENV[ACCUM_PERIOD]}_hour_gpm/gpm_*_{valid?fmt=%Y%m%d%H}.nc
 
 # Optional subdirectories relative to SERIES_ANALYSIS_OUTPUT_DIR to write output from SeriesAnalysis
-SERIES_ANALYSIS_OUTPUT_TEMPLATE = 10_12_I{init?fmt=%Y%m%dT%H}_V{valid?fmt=%Y%m%d%H}_L{lead?fmt=%HH}.nc
+SERIES_ANALYSIS_OUTPUT_TEMPLATE = {ENV[CYLC_TASK_CYCLE_POINT]}/SERIES_ANALYSIS_OUTPUT_AGAINST_GPM_{ENV[ACCUM_PERIOD]}hr_V{ENV[CYLC_TASK_CYCLE_POINT]}_L{lead?fmt=%HH}.nc

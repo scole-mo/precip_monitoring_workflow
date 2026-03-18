@@ -165,7 +165,7 @@ def get_data(start_date, end_date, data_dir, gpm_type, accum_period):
 
         # GPM fields are in mm/hr units for each half-hourly field
         gpm_sum = time_limited_gpm_cube.collapsed('time', iris.analysis.SUM) / 2.
-        gpm_sum.rename('Precipitation Amount')
+        gpm_sum.rename('precipitation amount')
         gpm_sum.units = cf_units.Unit('mm')
         print(gpm_sum)
         gpm_acc.append(gpm_sum)
@@ -206,10 +206,11 @@ def main():
     print(f"We are cycling on {cycling_on}")
 
     if cycling_on == 'DT':
-        START_ACCUM_DATE_DT = cycle_point
-        START_ACCUM_DATE_STR = cycle_point.strftime('%Y%m%d%H') 
+        print("hello from DT")
+        START_ACCUM_DATE_DT = cycle_point - datetime.timedelta(hours=lead)
+        START_ACCUM_DATE_STR = START_ACCUM_DATE_DT.strftime('%Y%m%d%H') 
         print(f"START_ACCUM_DATE: {START_ACCUM_DATE_STR}")
-        END_ACCUM_DATE_DT = cycle_point + datetime.timedelta(hours=lead)
+        END_ACCUM_DATE_DT = cycle_point
         END_ACCUM_DATE_STR = END_ACCUM_DATE_DT.strftime('%Y%m%d%H')
         print(f"END_ACCUM_DATE: {END_ACCUM_DATE_STR}")
         i = START_ACCUM_DATE_DT
