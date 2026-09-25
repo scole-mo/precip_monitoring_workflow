@@ -17,12 +17,14 @@ def parse_args():
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--accum_period", type=int, required=True)
     parser.add_argument("--prep_hours", type=int)
+    parser.add_argument("--model", default="global", help="Model type: global or ukv")
     args = parser.parse_args()
     return args
 
 def check_bounds(timeslice, hour):
     # return a True if bounds are correct for given length of time
     bounds = timeslice.coord("time").bounds[0]
+    LOGGER.info(f"Bounds: {bounds}, expected difference: {hour}")
     assert bounds[1] - bounds[0] == hour
 
 def create_total_cube(filepath, precip_type):
@@ -51,22 +53,33 @@ def main():
     output_dir = args.outdir
     accum_period = args.accum_period
     prep = args.prep_hours
+    model = args.model
+    
+    # Set file prefix based on model
+    file_prefix = "ukv" if model == "ukv" else "gl-mn"
+    
     LOGGER.info(f" DATETIME: {dt}")
     LOGGER.info(f" DATADIR: {datadir}")
     LOGGER.info(f" OUTDIR: {output_dir}")
     LOGGER.info(f" ACCUM_PERIOD: {accum_period}")
     LOGGER.info(f" PREP_HOURS: {prep}")
+    LOGGER.info(f" MODEL: {model}")
+    LOGGER.info(f" FILE_PREFIX: {file_prefix}")
 
     # Determine which datetimes to process
     if prep and prep > 0:
         # Generate list of datetimes from (dt - prep_hours) to dt at intervals
         end_dt = datetime.strptime(dt, "%Y%m%dT%H%MZ")
         start_dt = end_dt - timedelta(hours=prep)
+        if model == "ukv" and start_dt.hour % 3 != 0:
+            start_dt += timedelta(hours=(3 - (start_dt.hour % 3)))
         datetimes_to_process = []
         current_dt = start_dt
+        # UKV cycles every 3 hours; global uses accum_period as step
+        step_hours = 3 if model == "ukv" else accum_period
         while current_dt <= end_dt:
             datetimes_to_process.append(current_dt.strftime("%Y%m%dT%H%MZ"))
-            current_dt += timedelta(hours=accum_period)
+            current_dt += timedelta(hours=step_hours)
         LOGGER.info(f"Processing datetimes: {datetimes_to_process}")
     else:
         # Just process the single datetime
@@ -86,26 +99,28 @@ def main():
         print(f"Processing datetime: {process_dt} for accumulation period: {accum_period} hours")
 
         for accum in [accum_period]:
-            T0 = f"{datadir}/{accum}_hour/{process_dt}_gl-mn_T000.pp"
-            Tn = f"{datadir}/{accum}_hour/{process_dt}_gl-mn_T{accum:03d}.pp"
+            T0 = f"{datadir}/{accum}_hour/{process_dt}_{file_prefix}_T000.pp"
+            Tn = f"{datadir}/{accum}_hour/{process_dt}_{file_prefix}_T{accum:03d}.pp"
 
-            # CONVECTIVE ANALYSIS
-            conv_cube_t0 = create_total_cube(T0, "convective")
-            conv_cube_tn = create_total_cube(Tn, "convective")
-            conv_t0_time_slices = iris.cube.CubeList(conv_cube_t0.slices_over(["time"]))
-            conv_tn_time_slices = iris.cube.CubeList(conv_cube_tn.slices_over(["time"]))
+            # CONVECTIVE ANALYSIS (skip for UKV - only has large-scale precip)
+            use_convective = (model != "ukv")
+            if use_convective:
+                conv_cube_t0 = create_total_cube(T0, "convective")
+                conv_cube_tn = create_total_cube(Tn, "convective")
+                conv_t0_time_slices = iris.cube.CubeList(conv_cube_t0.slices_over(["time"]))
+                conv_tn_time_slices = iris.cube.CubeList(conv_cube_tn.slices_over(["time"]))
 
-            assert(len(conv_t0_time_slices) == 1)
-            conv_t0_analysis = conv_t0_time_slices[0]
-            conv_tn_analysis = conv_tn_time_slices[-1]
+                assert(len(conv_t0_time_slices) == 1)
+                conv_t0_analysis = conv_t0_time_slices[0]
+                conv_tn_analysis = conv_tn_time_slices[-1]
 
-            check_bounds(conv_t0_analysis, 3.0)
-            check_bounds(conv_tn_analysis, float(accum) + 3.0)
-            LOGGER.info(f"Bounds are correct, {accum}hr difference")
+                check_bounds(conv_t0_analysis, 3.0)
+                check_bounds(conv_tn_analysis, float(accum) + 3.0)
+                LOGGER.info(f"Bounds are correct, {accum}hr difference")
 
-            conv_analysis_cube = conv_tn_analysis - conv_t0_analysis
-            conv_analysis_cube.rename(f"(t+{accum})-(t+0) conv analysis")
-            LOGGER.info(f"conv analysis cube: {conv_analysis_cube}")
+                conv_analysis_cube = conv_tn_analysis - conv_t0_analysis
+                conv_analysis_cube.rename(f"(t+{accum})-(t+0) conv analysis")
+                LOGGER.info(f"conv analysis cube: {conv_analysis_cube}")
 
             # LARGE SCALE ANALYSIS
             lsr_cube_t0 = create_total_cube(T0, "large_scale")
@@ -113,13 +128,18 @@ def main():
             lsr_t0_time_slices = iris.cube.CubeList(lsr_cube_t0.slices_over(["time"]))
             lsr_tn_time_slices = iris.cube.CubeList(lsr_cube_tn.slices_over(["time"]))
 
-            assert(len(lsr_t0_time_slices) == 1)
-            lsr_t0_analysis = lsr_t0_time_slices[0]
-            lsr_tn_analysis = lsr_tn_time_slices[-1]
+            # UKV has multiple time slices per file; global has 1
+            if model != "ukv":
+                assert(len(lsr_t0_time_slices) == 1)
+            lsr_t0_analysis = lsr_t0_time_slices[0]  # First slice for T0
+            lsr_tn_analysis = lsr_tn_time_slices[-1]  # Last slice for Tn
+            LOGGER.info(f"Start slice time: {lsr_t0_analysis.coord('time').cell(0).point.strftime('%Y%m%dT%H%MZ')}, End slice time: {lsr_tn_analysis.coord('time').cell(0).point.strftime('%Y%m%dT%H%MZ')}")
 
-            check_bounds(lsr_t0_analysis, 3.0)
-            check_bounds(lsr_tn_analysis, float(accum) + 3.0)
-            LOGGER.info(f"Bounds are correct, {accum}hr difference")
+            # Skip bounds check for UKV (different accumulation structure)
+            if model != "ukv":
+                check_bounds(lsr_t0_analysis, 3.0)
+                check_bounds(lsr_tn_analysis, float(accum) + 3.0)
+                LOGGER.info(f"Bounds are correct, {accum}hr difference")
 
             lsr_analysis_cube = lsr_tn_analysis - lsr_t0_analysis
             lsr_analysis_cube.rename(f"(t+{accum})-(t+0) large scale analysis")
@@ -137,12 +157,16 @@ def main():
             # Total analysis
             total_analysis = lsr_analysis_cube.copy()
             total_analysis.long_name = "precipitation_amount"
-            total_data = lsr_analysis_cube.data + conv_analysis_cube.data
+            if use_convective:
+                total_data = lsr_analysis_cube.data + conv_analysis_cube.data
+            else:
+                total_data = lsr_analysis_cube.data
             total_analysis.data = total_data
 
             total_analysis.attributes['valid_time'] = VT
             total_path_to_save = f"{output_dir}/VT{VT}_analysis_{accum}hr.nc"
 
+            LOGGER.info(f"Saving output to: {total_path_to_save}")
             iris.save(total_analysis, total_path_to_save)
 
 

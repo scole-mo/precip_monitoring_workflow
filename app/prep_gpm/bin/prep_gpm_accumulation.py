@@ -121,11 +121,11 @@ def get_data(start_date, end_date, data_dir, gpm_type, accum_period):
     if gpm_type == 'GPM':
         gpm_type = 'production'
         data_dir = os.path.join(data_dir, "production")
-        gpm_filename = f"gpm_imerg_production_V???_%Y%m%d.nc"
+        gpm_filename = f"gpm_imerg_production_V??_%Y%m%d.nc"
     elif gpm_type == 'GPM_NRTlate':
         gpm_type = 'NRTlate'
-        data_dir = os.path.join(data_dir, 'NRTlate', "V???")
-        gpm_filename = f"gpm_imerg_NRTlate_V???_%Y%m%d.nc"
+        data_dir = os.path.join(data_dir, 'NRTlate', "V??")
+        gpm_filename = f"gpm_imerg_NRTlate_V??_%Y%m%d.nc"
     else:
         raise NotImplementedError("Can't currently process that category of GPM data: {}".format(gpm_type))
 

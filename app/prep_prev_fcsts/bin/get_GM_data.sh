@@ -12,22 +12,15 @@ if [[ "$accum_period" == "24" ]]; then
    x=144
 fi
 
-# This is offsetting BACKWARD from input_date, then FORWARD by accum_period
-# For 6hr at 20250126T0600Z:
-#   fcst_date = 20250126T0600Z - 60H = 20250123T1800Z (WRONG!)
-#   input_date = 20250126T0600Z + 6H = 20250126T1200Z
-# This doesn't make sense for your use case
-
-# BETTER APPROACH: Don't offset input_date forward
+# Convert input_date to numeric format for comparison
 fcst_date=$(isodatetime -u $input_date --offset -PT${max_lead}H --print-format=%Y%m%d%H%M)
-# Keep input_date as-is (it's already the valid time you want)
-# input_date stays as input_date
+input_date_numeric=$(isodatetime -u $input_date --print-format=%Y%m%d%H%M)
 
 # Loop from fcst_date to input_date at intervals of accum_period
 current_date=$fcst_date
-echo "Getting GM data from ${fcst_date} to ${input_date} at ${accum_period}-hour intervals."
+echo "Getting GM data from ${fcst_date} to ${input_date_numeric} at ${accum_period}-hour intervals."
 
-while [[ $current_date -le $input_date ]]; do
+while [[ $current_date -le $input_date_numeric ]]; do
 
     year=${current_date:0:4}
     date=${current_date:0:8}

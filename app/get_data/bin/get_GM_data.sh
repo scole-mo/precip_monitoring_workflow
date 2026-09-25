@@ -4,6 +4,7 @@ fcst_date=$1
 datadir=$2
 max_lead=$3
 accum_period=$4
+model=${MODEL:-global}  # Default to global if not set
 
 # Remove T and Z if present to normalize date format
 fcst_date=${fcst_date//T/}
@@ -20,6 +21,26 @@ echo "year: $year"
 echo "date: $date"
 echo "hour: $hour"
 echo "save_current_date: $save_current_date"
+echo "model: $model"
+
+# Set model-specific paths and filenames
+if [[ "$model" == "ukv" ]]; then
+    mass_path="moose:/opfc/atm/ukv/prods/${year}.pp/"
+    filename_pattern="prods_op_ukv_${date}_${hour}_*.pp"
+    output_prefix="ukv"
+else
+    # Default to global model
+    mass_path="moose:/opfc/atm/global/prods/${year}.pp/"
+    filename_pattern="prods_op_gl-mn_${date}_${hour}_*.pp"
+    output_prefix="gl-mn"
+fi
+
+# Ensure base data directory and output directories exist before any moo select writes.
+mkdir -p "${datadir}"
+mkdir -p "${datadir}/${accum_period}_hour"
+if [[ "$model" == "global" ]]; then
+  mkdir -p "${datadir}/6_hour"
+fi
 
 ### Determine lead times based on forecast hour ###
 
@@ -47,56 +68,76 @@ else
 fi
 leads_h=$(echo $leads_h)  # Remove trailing space if needed
 
-#################### UPDATE ANALYSES ##########################
+#################### UPDATE ANALYSES (Global model only) ##########################
 ## 0 & 6 used here as update analyses are only available at 000 and 006 ##
-mass-pull () {
-  local analysis=$1 
-  touch query
-  cat >query <<EOF
+if [[ "$model" == "global" ]]; then
+    mass-pull-analysis () {
+      local analysis=$1 
+      touch query
+      cat >query <<EOF
 begin
  filename="prods_op_gl-up_${date}_${hour}_${analysis}.pp"
  stash=(5201,5202,4201,4202)
 end
 EOF
 
-  moo select -I query moose:/opfc/atm/global/prods/${year}.pp/ ${datadir}/6_hour/${save_current_date}_gl-up_${analysis}.pp
-  rm query
-}
+      /usr/bin/moo select -I query moose:/opfc/atm/global/prods/${year}.pp/ ${datadir}/6_hour/${save_current_date}_gl-up_${analysis}.pp
+      rm query
+    }
 
-for analysis in "${analysis_runs[@]}"; do
-  mass-pull "$analysis"
-done
+    for analysis in "${analysis_runs[@]}"; do
+      mass-pull-analysis "$analysis"
+    done
+fi
 
 #################### PER ACCUM PERIOD ###########################
 
 mass-pull () {
+local outfile="${datadir}/${accum_period}_hour/${save_current_date}_${output_prefix}_T${this_lead}.pp"
+local query_filename
+
+# Remove existing file to avoid ERROR_CLIENT_PATH_ALREADY_EXISTS
+if [[ -f "$outfile" ]]; then
+    echo "Removing existing file: $outfile"
+    rm -f "$outfile"
+fi
+
 touch query
-cat >query <<EOF
+if [[ "$model" == "ukv" ]]; then
+  # UKV archive filenames already encode lead time (e.g. ..._006.pp),
+  # so query by filename and stash only - no lbft filter needed.
+  query_filename="prods_op_ukv_${date}_${hour}*"
+  cat >query <<EOF
   begin
-    filename="prods_op_gl-mn_${date}_${hour}_*.pp"
+    filename="${query_filename}"
+    stash=(4201,4202)
+    lbft=${this_lead}
+    mind=0
+  end
+EOF
+else
+  query_filename="${filename_pattern}"
+  cat >query <<EOF
+  begin
+    filename="${query_filename}"
     stash=(5201,5202,4201,4202)
     lbft=${lead}
   end
 EOF
+fi
 
-moo select -I query moose:/opfc/atm/global/prods/${year}.pp/ ${datadir}/${accum_period}_hour/${save_current_date}_gl-mn_T${this_lead}.pp
+ /usr/bin/moo select -f -I query ${mass_path} ${outfile}
 
 }
 
-
 # Pull from MASS archive
 list_of_files=''
-
-if [ ! -d "${datadir}/${accum_period}_hour" ] ; then
-  echo "${datadir}/${accum_period}_hour doesn't currently exist. Making..."
-  mkdir -p ${datadir}/${accum_period}_hour
-fi
 
 for lead in $leads_h
 do
   this_lead=$(printf "%03d" ${lead})
   echo "Processing lead time: ${this_lead}"
-  file_to_cat="${datadir}/${accum_period}_hour/${save_current_date}_gl-mn_T${this_lead}.pp"
+  file_to_cat="${datadir}/${accum_period}_hour/${save_current_date}_${output_prefix}_T${this_lead}.pp"
   list_of_files=$(echo ${list_of_files} "${file_to_cat} ")
   mass-pull
   rm query
@@ -104,8 +145,8 @@ done
 
 
 accum=$(printf "%03d" $accum_period)
-echo "cat $list_of_files > ${datadir}/${accum_period}_hour/${save_current_date}_gl-mn_${accum}.pp"
-cat $list_of_files > ${datadir}/${accum_period}_hour/${save_current_date}_gl-mn_${accum}.pp
+echo "cat $list_of_files > ${datadir}/${accum_period}_hour/${save_current_date}_${output_prefix}_${accum}.pp"
+cat $list_of_files > ${datadir}/${accum_period}_hour/${save_current_date}_${output_prefix}_${accum}.pp
 
 
 ############################## FOR TRIALS #########################################
@@ -113,5 +154,5 @@ cat $list_of_files > ${datadir}/${accum_period}_hour/${save_current_date}_gl-mn_
 # trial_name2=$3
 # shortened_trial_name1=$(echo ${trial_name1} | tr -d '-')
 # shortened_trial_name2=$(echo ${trial_name2} | tr -d '-')
-# moo select query moose:/devfc/${trial_name1}/field.pp/ ${datadir}/${fcst_date}_${shortened_trial_name1}.pp
-# moo select query moose:/devfc/${trial_name2}/field.pp/ ${datadir}/${fcst_date}_${shortened_trial_name2}.pp
+# /usr/bin/moo select query moose:/devfc/${trial_name1}/field.pp/ ${datadir}/${fcst_date}_${shortened_trial_name1}.pp
+# /usr/bin/moo select query moose:/devfc/${trial_name2}/field.pp/ ${datadir}/${fcst_date}_${shortened_trial_name2}.pp

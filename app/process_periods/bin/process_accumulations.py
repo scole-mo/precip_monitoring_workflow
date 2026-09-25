@@ -21,6 +21,7 @@ def parse_args():
     parser.add_argument("--trial1")
     parser.add_argument("--trial2")
     parser.add_argument("--accum_period", type=int, required=True)
+    parser.add_argument("--model", default="global", help="Model type: global or ukv")
     args = parser.parse_args()
     return args
 
@@ -71,7 +72,12 @@ class Precip_accumulations_large_scale:
         # first handle ensemble possibly having multidimensional time coordinates
         rainsnow_separated = separate_realization_time(rainsnow)
 
-        LOGGER.info(f"rainsnow_separated time: {rainsnow_separated.coord('time')}")
+        if isinstance(rainsnow_separated, iris.cube.CubeList):
+            LOGGER.info(f"rainsnow_separated is CubeList with {len(rainsnow_separated)} cubes")
+            for i, cube in enumerate(rainsnow_separated):
+                LOGGER.info(f"  Cube {i} time: {cube.coord('time')}")
+        else:
+            LOGGER.info(f"rainsnow_separated time: {rainsnow_separated.coord('time')}")
 
         # only want hourly output so extract times that are on the hour
         rainsnow_filtered = iris.cube.CubeList()
@@ -342,11 +348,18 @@ def main():
     output_dir = args.outdir
     prep = args.prep_hours
     accum = args.accum_period
+    model = args.model
+    
+    # Set file prefix based on model
+    file_prefix = "ukv" if model == "ukv" else "gl-mn"
+    
     LOGGER.info(f" DATETIME: {dt}")
     LOGGER.info(f" DATADIR: {datadir}")
     LOGGER.info(f" OUTDIR: {output_dir}")
     LOGGER.info(f" PREP_HOURS: {prep}")
     LOGGER.info(f" ACCUM_PERIOD: {accum}")
+    LOGGER.info(f" MODEL: {model}")
+    LOGGER.info(f" FILE_PREFIX: {file_prefix}")
 
     #accum_periods = [accum]
 
@@ -356,11 +369,15 @@ def main():
         # Generate list of datetimes from (dt - prep_hours) to dt at intervals
         end_dt = datetime.strptime(dt, "%Y%m%dT%H%MZ")
         start_dt = end_dt - timedelta(hours=(prep))  # start time is prep hours plus accumulation period before the main datetime
+        if model == "ukv" and start_dt.hour % 3 != 0:
+            start_dt += timedelta(hours=(3 - (start_dt.hour % 3)))
         datetimes_to_process = []
         current_dt = start_dt
+        # UKV cycles every 3 hours; global uses accum_period as step
+        step_hours = 3 if model == "ukv" else accum
         while current_dt <= end_dt:
             datetimes_to_process.append(current_dt.strftime("%Y%m%dT%H%MZ"))
-            current_dt += timedelta(hours=accum) ## incerement by prep hours but may need to change this section to be in loop of accums in accum periods
+            current_dt += timedelta(hours=step_hours)
         LOGGER.info(f"Processing datetimes: {datetimes_to_process}")
     else:
         # Just process the single datetime
@@ -369,10 +386,55 @@ def main():
     for process_dt in datetimes_to_process:
         LOGGER.info(f"Processing datetime: {process_dt}")
         
+        init_time = datetime.strptime(process_dt, "%Y%m%dT%H%MZ")
+
+        # UKV: use same approach as process_analysis.py - difference T-files directly
+        if model == "ukv":
+            max_lead = 54  # UKV max lead time
+            for lead in range(accum, max_lead + 1, accum):
+                T_start = f"{datadir}/{accum}_hour/{process_dt}_{file_prefix}_T{lead - accum:03d}.pp"
+                T_end = f"{datadir}/{accum}_hour/{process_dt}_{file_prefix}_T{lead:03d}.pp"
+                
+                LOGGER.info(f"UKV lead T+{lead}: {T_end} - {T_start}")
+                
+                try:
+                    # Load large-scale precip from both files
+                    lsr_start = iris.load_cube(T_start, iris.AttributeConstraint(STASH='m01s04i201'))
+                    lsr_end = iris.load_cube(T_end, iris.AttributeConstraint(STASH='m01s04i201'))
+                    snow_start = iris.load_cube(T_start, iris.AttributeConstraint(STASH='m01s04i202'))
+                    snow_end = iris.load_cube(T_end, iris.AttributeConstraint(STASH='m01s04i202'))
+                except Exception as e:
+                    LOGGER.warning(f"Could not load files for lead T+{lead}: {e}")
+                    continue
+                
+                # Sum rain + snow, take first/last slices (same as process_analysis.py)
+                total_start = lsr_start + snow_start
+                total_end = lsr_end + snow_end
+                
+                start_slices = iris.cube.CubeList(total_start.slices_over(["time"]))
+                end_slices = iris.cube.CubeList(total_end.slices_over(["time"]))
+                
+                # First slice of start file, last slice of end file
+                LOGGER.info(f"Start slice time: {start_slices[0].coord('time').cell(0).point.strftime('%Y%m%dT%H%MZ')}, End slice time: {end_slices[-1].coord('time').cell(0).point.strftime('%Y%m%dT%H%MZ')}")
+                accum_cube = end_slices[-1] - start_slices[0]
+                accum_cube.long_name = "precipitation_amount"
+                
+                # Valid time = init + lead
+                valid_time = init_time + timedelta(hours=lead)
+                VT = valid_time.strftime("%Y%m%dT%H%MZ")
+                accum_cube.attributes['valid_time'] = VT
+                
+                file_to_save = f"{output_dir}/VT{VT}_I{process_dt}_{accum}hr_accums.nc"
+                LOGGER.info(f"Saving: {file_to_save}")
+                iris.save(accum_cube, file_to_save)
+                print(f"OUTPUT FILE SAVED: {file_to_save}")
+            
+            continue  # Skip the global model processing below
+
         #for accum in accum_periods:
 
         val = accum 
-        file = f"{datadir}/{accum}_hour/{process_dt}_gl-mn_{accum:03d}.pp"
+        file = f"{datadir}/{accum}_hour/{process_dt}_{file_prefix}_{accum:03d}.pp"
         #print(f"This is file_to_read: {filepath}")
 
         #cubes_to_read = iris.load(filepath)
@@ -380,14 +442,20 @@ def main():
         #print(f" This is file being processed: {file}")
         lsr_precip = Precip_accumulations_large_scale(file)
         print(lsr_precip)
-        conv_precip = Precip_accumulations_convective(file)
-        print(conv_precip)
         
         LOGGER.info(f"accumulation period: {accum}. Making accumulations..")
         lsr_accumulations = lsr_precip.get_cube_accumulations(accum)
-        conv_accumulations = conv_precip.get_cube_accumulations(accum)
-
-        total_accumulations = lsr_accumulations + conv_accumulations
+        
+        # UKV is convection-permitting, so no separate convective precip
+        if model == "ukv":
+            LOGGER.info("UKV model detected - using large-scale precipitation only (convection-permitting model)")
+            total_accumulations = lsr_accumulations
+        else:
+            conv_precip = Precip_accumulations_convective(file)
+            print(conv_precip)
+            conv_accumulations = conv_precip.get_cube_accumulations(accum)
+            total_accumulations = lsr_accumulations + conv_accumulations
+        
         total_accumulations.long_name = "precipitation_amount"
 
         init_time = datetime.strptime(process_dt, "%Y%m%dT%H%MZ")  # adjust format as needed
@@ -416,34 +484,52 @@ def main():
 
         # ADDED: Diagnostic logging to check time coordinates
         time_coord = total_accumulations.coord('time')
+        print(f"DEBUG: time_coord exists: {time_coord is not None}")
         if time_coord:
-            LOGGER.info(f"Time coordinate points: {time_coord.points}")
-            LOGGER.info(f"Time coordinate bounds: {time_coord.bounds if time_coord.has_bounds() else 'None'}")
-            LOGGER.info(f"Time coordinate shape: {time_coord.shape}")
+            print(f"DEBUG: Time coordinate shape: {time_coord.shape}")
+            print(f"DEBUG: Time coordinate shape[0]: {time_coord.shape[0]}")
 
         # NEW: Split by time and save each valid time separately (like analysis files)
+        print(f"DEBUG: Checking if should split: time_coord={time_coord is not None}, shape[0]={time_coord.shape[0] if time_coord else 'N/A'}")
         if time_coord and time_coord.shape[0] > 1:
-            LOGGER.info(f"Splitting cube with {time_coord.shape[0]} time steps into separate files")
+            print(f"Splitting cube with {time_coord.shape[0]} time steps into separate files")
             
             # Iterate over each time slice
             for time_slice in total_accumulations.slices_over('time'):
+                
                 # Extract the valid time for this slice
                 slice_time_coord = time_slice.coord('time')
                 slice_valid_time = slice_time_coord.units.num2date(slice_time_coord.points[0])
                 
+                # Convert cftime to datetime for lead calculation
+                slice_valid_dt = datetime(slice_valid_time.year, slice_valid_time.month, 
+                                          slice_valid_time.day, slice_valid_time.hour,
+                                          slice_valid_time.minute, slice_valid_time.second)
+                
+                # Calculate lead time (valid - init) in hours
+                lead_hours = (slice_valid_dt - init_time).total_seconds() / 3600
+                
+                # Only save files at valid times that are multiples of the accumulation period
+                # e.g., for 6hr accums from 03Z init: T+6 (09Z), T+12 (15Z), T+18 (21Z), etc.
+                if lead_hours < accum or lead_hours % accum != 0 or slice_valid_time.minute != 0:
+                    print(f"Skipping {slice_valid_time} (lead={lead_hours}h) - not on {accum}-hourly lead boundary")
+                    continue
+                
+                #print(f'before squeeze time slice valid_time: {sliced_cube.attributes["valid_time"]}')
                 # Remove the time dimension to match analysis file structure
                 sliced_cube = iris.util.squeeze(time_slice)
                 
                 # Set the valid_time attribute for this specific slice
-                sliced_cube.attributes['valid_time'] = slice_valid_time.strftime("%Y%m%dT%H%MZ")
+                sliced_cube.attributes['valid_time'] = slice_valid_dt.strftime("%Y%m%dT%H%MZ")
+                print(f'after squeeze time slice valid_time: {sliced_cube.attributes["valid_time"]}')
                 
                 # Generate filename with valid time prefix (like analysis files)
-                file_to_save = f"{output_dir}/VT{slice_valid_time.strftime('%Y%m%dT%H%MZ')}_I{process_dt}_{accum}hr_accums.nc"
+                file_to_save = f"{output_dir}/VT{slice_valid_dt.strftime('%Y%m%dT%H%MZ')}_I{process_dt}_{accum}hr_accums.nc"
                 
-                LOGGER.info(f"Saving {file_to_save}")
-                LOGGER.info(f"Cube shape: {sliced_cube.shape} (should be 2D: lat, lon)")
+                print(f"Saving forecast file: {file_to_save}")
                 
                 iris.save(sliced_cube, file_to_save)
+                print(f"OUTPUT FILE SAVED: {file_to_save}")
                 
         else:
             # Single time step - remove time dimension
@@ -460,6 +546,7 @@ def main():
             LOGGER.info(f"Cube shape: {squeezed_cube.shape} (should be 2D: lat, lon)")
             
             iris.save(squeezed_cube, file_to_save)
+            print(f"OUTPUT FILE SAVED: {file_to_save}")
 
         # REMOVED: Old single-file save
         # total_path_to_save = f"{output_dir}/{process_dt}_{accum}hr_accums.nc"

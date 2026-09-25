@@ -21,7 +21,7 @@ LOOP_BY = VALID
 VALID_TIME_FMT = %Y%m%dT%H%MZ
 
 # Start time for METplus run - must match INIT_TIME_FMT
-VALID_BEG={ENV[CYLC_TASK_CYCLE_POINT]}
+VALID_BEG={ENV[VALID_START]}
 
 # End time for METplus run - must match INIT_TIME_FMT
 VALID_END={ENV[CYLC_TASK_CYCLE_POINT]}
@@ -32,12 +32,17 @@ SERIES_ANALYSIS_RUNTIME_FREQ = RUN_ONCE_PER_LEAD
 #  Must be >= 60 seconds
 ##VALID_INCREMENT = {ENV[ACCUM_PERIOD]}H  
 
-SERIES_ANALYSIS_BLOCK_SIZE = 5160960
+# Set number of grid points to be processed concurrently
+SERIES_ANALYSIS_BLOCK_SIZE = -1
+
+## Set number of threads for any single run of a MET
+OMP_NUM_THREADS = 8
 
 # List of forecast leads to process for each run time (init or valid)
 # In hours if units are not specified
 # If unset, defaults to 0 (don't loop through forecast leads)
-LEAD_SEQ=begin_end_incr({ENV[LEAD_SEQ]})
+#LEAD_SEQ=begin_end_incr({ENV[LEAD_SEQ]})
+LEAD_SEQ={ENV[LEAD_SEQ]}
 
 ## For potential running on run once per init or valid
 #LEAD_SEQ_1 = begin_end_incr({ENV[LEAD_SEQ1]})
@@ -62,7 +67,7 @@ SERIES_ANALYSIS_CUSTOM_LOOP_LIST =
 LOOP_ORDER = processes
 
 # Verbosity of MET output - overrides LOG_VERBOSITY for SeriesAnalysis only
-LOG_SERIES_ANALYSIS_VERBOSITY = 3
+LOG_SERIES_ANALYSIS_VERBOSITY = 2
 
 # set to True to add the -paired flag to the SeriesAnalysis command
 SERIES_ANALYSIS_IS_PAIRED = FALSE
@@ -78,10 +83,10 @@ SERIES_ANALYSIS_IS_PAIRED = FALSE
 
 # list of statistics to generate with SeriesAnalysis
 
-#SERIES_ANALYSIS_CAT_THRESH = [>0.1, >1, >4, >8, >16, >30, >50, >75, >100]
-#SERIES_ANALYSIS_STAT_LIST = [TOTAL, FBAR, OBAR, RMSE, MBIAS, MAE, ME, ESTDEV, FSTDEV, OSTDEV, BCMSE]
-#SERIES_ANALYSIS_OUTPUT_STATS_CTS = [FBIAS, GSS];
-#SERIES_ANALYSIS_OUTPUT_STATS_CTC = [TOTAL, FY_OY, FY_ON, FN_OY, FN_ON];
+SERIES_ANALYSIS_CAT_THRESH = [>0.1, >1, >4, >8, >16, >30, >50, >75, >100]
+#SERIES_ANALYSIS_STAT_LIST = [TOTAL, FBAR, OBAR, RMSE, MBIAS, ESTDEV, FSTDEV, OSTDEV, BCMSE]
+#SERIES_ANALYSIS_OUTPUT_STATS_CTS = [FBIAS, GSS, BASER];
+SERIES_ANALYSIS_OUTPUT_STATS_CTC = [TOTAL, FY_OY, FY_ON, FN_OY, FN_ON];
 SERIES_ANALYSIS_OUTPUT_STATS_SL1L2 = [TOTAL, FBAR, OBAR, MAE]
 
 # Specify area masks for verification areas
@@ -110,6 +115,9 @@ FCST_VAR1_LEVELS = "(*,*)"
 
 OBS_VAR1_NAME = precipitation_amount
 OBS_VAR1_LEVELS = "(*,*)"
+
+FCST_VAR1_OPTIONS = set_attr_level = "A{ENV[ACCUM_PERIOD_FMT]}";
+OBS_VAR1_OPTIONS = set_attr_level = "A{ENV[ACCUM_PERIOD_FMT]}";
 
 # End of [config] section and start of [dir] section
 [dir]
@@ -143,4 +151,4 @@ FCST_SERIES_ANALYSIS_INPUT_TEMPLATE = VT{valid?fmt=%Y%m%dT%2H}00Z_I{init?fmt=%Y%
 OBS_SERIES_ANALYSIS_INPUT_TEMPLATE = {ENV[ACCUM_PERIOD]}_hour_gpm/gpm_*_{valid?fmt=%Y%m%d%H}.nc
 
 # Optional subdirectories relative to SERIES_ANALYSIS_OUTPUT_DIR to write output from SeriesAnalysis
-SERIES_ANALYSIS_OUTPUT_TEMPLATE = {ENV[CYLC_TASK_CYCLE_POINT]}/SERIES_ANALYSIS_OUTPUT_AGAINST_GPM_{ENV[ACCUM_PERIOD]}hr_V{ENV[CYLC_TASK_CYCLE_POINT]}_L{lead?fmt=%HH}.nc
+SERIES_ANALYSIS_OUTPUT_TEMPLATE = {ENV[CYLC_TASK_CYCLE_POINT]}/SERIES_ANALYSIS_OUTPUT_AGAINST_GPM_{ENV[ACCUM_PERIOD]}hr{ENV[AGG_LABEL]}_V{ENV[CYLC_TASK_CYCLE_POINT]}_L{lead?fmt=%HH}.nc

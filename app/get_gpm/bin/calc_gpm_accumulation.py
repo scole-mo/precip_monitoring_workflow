@@ -120,11 +120,11 @@ def get_data(start_date, end_date, data_dir, gpm_type, accum_period):
     print(gpm_type)
     if gpm_type == 'GPM':
         gpm_type = 'production'
-        data_dir = os.path.join(data_dir, "production")
+        data_dir = os.path.join(data_dir, "production", "%Y")
         gpm_filename = f"gpm_imerg_production_V???_%Y%m%d.nc"
     elif gpm_type == 'GPM_NRTlate':
         gpm_type = 'NRTlate'
-        data_dir = os.path.join(data_dir, 'NRTlate', "V???")
+        data_dir = os.path.join(data_dir, 'NRTlate', "V??", "%Y")
         gpm_filename = f"gpm_imerg_NRTlate_V???_%Y%m%d.nc"
     else:
         raise NotImplementedError("Can't currently process that category of GPM data: {}".format(gpm_type))
@@ -137,16 +137,28 @@ def get_data(start_date, end_date, data_dir, gpm_type, accum_period):
                                     interval=24,
                                     dtstart=first_day,
                                     until=last_day):
-        this_year = this_day.year
-        this_gpm_filename = os.path.join(data_dir, str(this_year), gpm_filename)
+        # Format the data_dir with year
+        this_data_dir = this_day.strftime(data_dir)
+        this_gpm_filename = os.path.join(this_data_dir, gpm_filename)
         this_gpm_file = insert_datetime(this_gpm_filename, this_day)
         print("Loading {}...".format(this_gpm_file))
+        
+        # Use glob to expand the wildcard pattern
+        import glob
+        matching_files = glob.glob(this_gpm_file)
+        if not matching_files:
+            print(f"Warning: No files found matching {this_gpm_file}")
+            continue
+        
         try:
-            gpm_cube = iris.load_cube(this_gpm_file)
+            gpm_cube = iris.load_cube(matching_files[0])
         except OSError:
             continue
         gpm_cubes.append(gpm_cube)
 
+    if not gpm_cubes:
+        raise ValueError(f"No GPM data found for dates {first_day} to {last_day}")
+    
     # now concatenate cubes together (should only be time axis differing at previous step)
     gpm_cube = gpm_cubes.concatenate_cube()
     print("Accumulating precipitation over required interval, {}-hours, "

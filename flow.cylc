@@ -4,48 +4,87 @@
 [scheduler]
     UTC mode = True
     [[events]]
+        stall timeout = PT3H
         abort on stall timeout = True
-        mail events = inactivity, stalled
-        workflow timeout = P1D
+        mail events = inactivity timeout, stall
+        workflow timeout = P7D
 
 [task parameters]
     periods = 6, 24
     truths = gpm, analysis
+    days_of_agg = 7, 30
+    
 
 [scheduling]
     initial cycle point = {{START_CYCLE_POINT}}
     {% if FINAL_CYCLE_POINT | default(False) %}
     final cycle point = {{FINAL_CYCLE_POINT}}
     {% endif %}
-    runahead limit = PT3H
-
+    runahead limit = P0
+    [[queues]]
+        [[[verpy_plotting_queue]]]
+            limit = 1
+            members = run_verpy_plotting<periods><truths>
+        [[[verpy_plotting_ukv_queue]]]
+            limit = 1
+            members = run_verpy_plotting_ukv<periods><truths>
     [[graph]]
         # Initial prep tasks (first 00Z and 12Z only)
         R1/T00 = """
-            prep_gpm<periods> & prep_prev_fcsts<periods> => get_data<periods> & get_gpm<periods> => process_periods_with_prep<periods> => process_analysis_with_prep<periods>
+            prep_prev_fcsts<periods=6> =>prep_prev_fcsts<periods=24> => get_data<periods> & get_gpm<periods> => process_periods_with_prep<periods> => process_analysis_with_prep<periods>
+            get_gpm<periods>
+            ##@wall_clock => get_ukv_data<periods> => process_ukv_periods<periods>
         """
         R1/T12 = """
-            prep_gpm<periods> & prep_prev_fcsts<periods> => get_data<periods> & get_gpm<periods> => process_periods_with_prep<periods> => process_analysis_with_prep<periods=6>
+            prep_prev_fcsts<periods> => get_data<periods> & get_gpm<periods> => process_periods_with_prep<periods> => process_analysis_with_prep<periods=6>
+            get_gpm<periods>
+            ##@wall_clock => get_ukv_data<periods> => process_ukv_periods<periods>
         """
 
         # 6hr period: runs every 6 hours, both truths
         PT6H!{{START_CYCLE_POINT}} = """
             get_data<periods=6> => process_analysis<periods=6> => run_series_analysis<periods=6, truths=analysis>
-            get_gpm<periods=6> => process_periods<periods=6> => run_series_analysis<periods=6, truths=gpm>
-            run_series_analysis<periods=6, truths> => run_verpy_plotting<periods=6, truths>
+            get_data<periods=6> & get_gpm<periods=6> => process_periods<periods=6> => run_series_analysis<periods=6, truths>
+            #get_ukv_data<periods=6> => process_ukv_periods<periods=6>
+            run_series_analysis<periods=6, truths>:finish => run_verpy_plotting<periods=6, truths>
+            run_verpy_plotting<periods=6, truths>:finish => update_imt_viewer
         """
 
-        # 24hr period at 00Z: both analysis and GPM
+        # 24hr period at 00Z: both analysis and GPM, plus aggregated analysis
         T00!{{START_CYCLE_POINT}} = """
             get_data<periods=24> => process_analysis<periods=24> => run_series_analysis<periods=24, truths=analysis>
-            get_gpm<periods=24> => process_periods<periods=24> => run_series_analysis<periods=24, truths=gpm>
-            run_series_analysis<periods=24, truths> => run_verpy_plotting<periods=24, truths>
+            ##get_ukv_data<periods=24> => process_ukv_periods<periods=24>
+            get_data<periods=24> & get_gpm<periods=24> => process_periods<periods=24> => run_series_analysis<periods=24, truths=gpm>
+            #run_series_analysis<periods=24, truths>:finish => run_verpy_plotting<periods=24, truths>
+            run_series_analysis<periods=24, truths>:finish => run_series_analysis_agg<periods=24, truths, days_of_agg>
+            run_series_analysis_agg<periods=24, truths, days_of_agg=7>:finish => run_verpy_plotting_agg<periods=24, truths>
+            run_series_analysis_agg<periods=24, truths, days_of_agg>:finish => housekeep
         """
 
-        # 24hr period at 12Z: GPM only (no analysis)
+        # 24hr period at 12Z: Gets 12Z forecasts 
         T12!{{START_CYCLE_POINT}} = """
             get_data<periods=24> & get_gpm<periods=24> => process_periods<periods=24>
+            ##get_ukv_data<periods=24> => process_ukv_periods<periods=24>
         """
+
+        # UKV prep - runs once at workflow start to backfill previous forecasts
+        R1 = """
+            prep_prev_ukv<periods=6>
+            get_ukv_data<periods=6>
+            prep_prev_ukv<periods=6> & get_ukv_data<periods=6> => process_ukv_analysis_with_prep<periods=6> & process_ukv_periods_with_prep<periods=6>
+        """
+
+        # UKV retrieval and plotting chain every 3 hours
+        PT3H!{{START_CYCLE_POINT}} = """
+            get_ukv_data<periods=6> => process_ukv_analysis<periods=6> & process_ukv_periods<periods=6> => run_series_analysis_ukv<periods=6, truths=analysis> 
+            #=> run_verpy_plotting_ukv<periods=6, truths=analysis>
+            #get_ukv_data<periods=24> => process_ukv_analysis<periods=24> => run_series_analysis_ukv<periods=24, truths=analysis>
+            run_series_analysis_ukv<periods=6, truths=analysis>:finish => run_verpy_plotting_ukv<periods=6, truths=analysis>
+            #run_series_analysis_ukv<periods=24, truths=analysis>:finish => run_verpy_plotting_ukv<periods=24, truths=analysis>
+            run_verpy_plotting_ukv<periods=6, truths=analysis>:finish => update_imt_viewer
+            #run_verpy_plotting_ukv<periods=24, truths=analysis>:finish => update_imt_viewer
+        """
+
 
 [runtime]
     [[root]]
@@ -65,6 +104,17 @@
         echo "Setting MAX_LEAD=$MAX_LEAD for period=$ACCUM_PERIOD at ${CYCLE_HOUR}Z"
         """
 
+    [[SET_MAX_LEAD_UKV]]
+        pre-script = """
+        CYCLE_HOUR=${CYLC_TASK_CYCLE_POINT:9:2}
+        if [[ "$ACCUM_PERIOD" == "6" ]]; then
+            export MAX_LEAD=52
+        elif [[ "$ACCUM_PERIOD" == "24" ]]; then
+            export MAX_LEAD=48
+        fi
+        echo "Setting UKV MAX_LEAD=$MAX_LEAD for period=$ACCUM_PERIOD at ${CYCLE_HOUR}Z"
+        """
+
     [[prep_prev_fcsts<periods>]]
         inherit = SET_MAX_LEAD
         execution time limit = PT6H
@@ -77,11 +127,23 @@
         [[[directives]]]
             -l mem = 2gb
             -q = shared
+            -l ncpus = 10
 
-    [[prep_gpm<periods>]]
-        inherit = SET_MAX_LEAD
+    [[prep_prev_gpm<periods>]]
         platform = spice
         env-script = "eval $(rose task-env)"
+        pre-script = """
+        # Set MAX_LEAD based on accumulation period
+        if [[ "$ACCUM_PERIOD" == "6" ]]; then
+            export MAX_LEAD=60
+        elif [[ "$ACCUM_PERIOD" == "24" ]]; then
+            export MAX_LEAD=144
+        fi
+        
+        # Go back 1 time step only (same as accumulation period)
+        export PREP_HOURS=${ACCUM_PERIOD}
+        echo "Setting PREP_HOURS=$PREP_HOURS and MAX_LEAD=$MAX_LEAD for GPM prep"
+        """
         [[[environment]]]
             ROSE_TASK_APP = prep_gpm
             DATADIR = {{DATA_DIR}}
@@ -94,6 +156,22 @@
             --mem = 10G
             --time = 10
 
+    [[prep_gpm<periods>]]
+        inherit = SET_MAX_LEAD
+        platform = spice
+        env-script = "eval $(rose task-env)"
+        [[[environment]]]
+            ROSE_TASK_APP = prep_gpm
+            DATADIR = {{DATA_DIR}}
+            GPM_DATA_DIR = {{GPM_DATA_DIR}}
+            GPM_OBS_TYPE = {{GPM_OBS_TYPE}}
+            OUTPUT_DATA = {{PROCESSED_DIR}}
+            ACCUM_PERIOD = %(periods)s
+            CYCLING_ON = {{CYCLING_ON}}
+        [[[directives]]]
+            --mem = 10G
+            --time = 10
+
     [[get_data<periods>]]
         inherit = SET_MAX_LEAD
         execution time limit = PT4H
@@ -102,6 +180,43 @@
             ROSE_TASK_APP = get_data
             DATADIR = {{DATA_DIR}}
             ACCUM_PERIOD = %(periods)s
+            MODEL = global
+        [[[directives]]]
+            -l mem = 2gb
+            -q = shared
+
+    [[prep_prev_ukv<periods>]]
+        inherit = SET_MAX_LEAD_UKV
+        execution time limit = PT6H
+        execution retry delays = 12*PT30M
+        script = """
+        # Loop back through previous init times to backfill UKV data
+        # UKV runs every 3 hours, so step by 3 (not ACCUM_PERIOD) to cover all inits
+        UKV_CYCLE_INTERVAL=3
+        for offset in $(seq ${UKV_CYCLE_INTERVAL} ${UKV_CYCLE_INTERVAL} ${MAX_LEAD}); do
+            past_date=$(isodatetime -u ${CYLC_TASK_CYCLE_POINT} --offset -PT${offset}H --print-format=%Y%m%dT%H%MZ)
+            echo "Fetching UKV data for init time: $past_date"
+            bash ${CYLC_WORKFLOW_RUN_DIR}/app/get_data/bin/get_GM_data.sh "$past_date" "$DATADIR" "$MAX_LEAD" "$ACCUM_PERIOD"
+        done
+        """
+        [[[environment]]]
+            DATADIR = {{UKV_DATA_DIR}}
+            ACCUM_PERIOD = %(periods)s
+            MODEL = ukv
+        [[[directives]]]
+            -l mem = 2gb
+            -q = shared
+            -l ncpus = 10
+
+    [[get_ukv_data<periods>]]
+        inherit = SET_MAX_LEAD_UKV
+        execution time limit = PT4H
+        execution retry delays = 12*PT30M
+        [[[environment]]]
+            ROSE_TASK_APP = get_data
+            DATADIR = {{UKV_DATA_DIR}}
+            ACCUM_PERIOD = %(periods)s
+            MODEL = ukv
         [[[directives]]]
             -l mem = 2gb
             -q = shared
@@ -111,7 +226,7 @@
         platform = spice
         env-script = "eval $(rose task-env)"
         [[[environment]]]
-            ROSE_TASK_APP = prep_gpm
+            ROSE_TASK_APP = get_gpm
             DATADIR = {{DATA_DIR}}
             GPM_DATA_DIR = {{GPM_DATA_DIR}}
             GPM_OBS_TYPE = {{GPM_OBS_TYPE}}
@@ -124,10 +239,24 @@
 
     [[PROCESS<periods>]]
         platform = spice
+        execution retry delays = 6*PT1H
         [[[environment]]]
             OUTPUT_DIR = {{PROCESSED_DIR}}
             DATADIR = {{DATA_DIR}}
             ACCUM_PERIOD = %(periods)s
+            MODEL = global
+        [[[directives]]]
+            --mem = 20G
+            --time = 90
+
+    [[PROCESS_UKV<periods>]]
+        platform = spice
+        execution retry delays = 6*PT1H
+        [[[environment]]]
+            OUTPUT_DIR = {{UKV_PROCESSED_DIR}}
+            DATADIR = {{UKV_DATA_DIR}}
+            ACCUM_PERIOD = %(periods)s
+            MODEL = ukv
         [[[directives]]]
             --mem = 20G
             --time = 90
@@ -162,11 +291,45 @@
         [[[environment]]]
             ROSE_TASK_APP = process_periods
 
+    # UKV processing tasks
+    [[process_ukv_analysis<periods>]]
+        inherit = PROCESS_UKV<periods>
+        [[[environment]]]
+            ROSE_TASK_APP = process_analysis
+
+    [[process_ukv_analysis_with_prep<periods>]]
+        inherit = PROCESS_UKV<periods>, SET_MAX_LEAD_UKV
+        script = """
+        export PREP_HOURS=${MAX_LEAD:-48}
+        echo "Setting PREP_HOURS=$PREP_HOURS for UKV analysis backfill"
+        rose task-run
+        """
+        [[[environment]]]
+            ROSE_TASK_APP = process_analysis
+
+    [[process_ukv_periods<periods>]]
+        inherit = PROCESS_UKV<periods>
+        [[[environment]]]
+            ROSE_TASK_APP = process_periods
+
+    [[process_ukv_periods_with_prep<periods>]]
+        inherit = PROCESS_UKV<periods>, SET_MAX_LEAD_UKV
+        script = """
+        export PREP_HOURS=${MAX_LEAD:-48}
+        echo "Setting PREP_HOURS=$PREP_HOURS for UKV periods backfill"
+        rose task-run
+        """
+        [[[environment]]]
+            ROSE_TASK_APP = process_periods
+
     [[run_series_analysis<periods><truths>]]
         platform = spice
         env-script = "eval $(rose task-env)"
         pre-script = """
         CYCLE_HOUR=${CYLC_TASK_CYCLE_POINT:9:2}
+        # Format accumulation period with leading zero (6 -> 06, 24 -> 24)
+        export ACCUM_PERIOD_FMT=$(printf "%02d" ${ACCUM_PERIOD})
+        
         if [[ "$ACCUM_PERIOD" == "6" ]]; then
             export LEAD_SEQ=6,60,6
             export MAX_LEAD=60
@@ -178,24 +341,139 @@
             fi
             export MAX_LEAD=144
         fi
-        echo "Setting LEAD_SEQ=$LEAD_SEQ and MAX_LEAD=$MAX_LEAD for period=$ACCUM_PERIOD at ${CYCLE_HOUR}Z"
+        
+        # For single cycle analysis, start = end = cycle point
+        export VALID_START=${CYLC_TASK_CYCLE_POINT}
+        export AGG_LABEL=""
+        
+        echo "Setting LEAD_SEQ=$LEAD_SEQ and MAX_LEAD=$MAX_LEAD"
+        echo "VALID_START=$VALID_START, VALID_END=$CYLC_TASK_CYCLE_POINT"
         """
         [[[environment]]]
             ROSE_TASK_APP = run_series_analysis
-            FINAL_CYCLE_POINT = {{FINAL_CYCLE_POINT}}
+            FINAL_CYCLE_POINT = {{FINAL_CYCLE_POINT | default('')}}
             ACCUM_DATA_DIR = {{PROCESSED_DIR}}
             DATADIR = {{DATA_DIR}}
             OUTPUT_BASE = {{OUTPUT_BASE}}
             AREA_MASKS = {{AREA_MASKS}}
             ACCUM_PERIOD = %(periods)s
             TRUTH = %(truths)s
-            MET_OUTPUT_DIR = {{MET_OUTPUT_DIR}}
+            MET_OUTPUT_DIR = {{MET_OUTPUT_DIR}}/%(truths)s
+        [[[directives]]]
+            --mem = 120G
+            --time = 30
+            --cpus-per-task = 10
+
+{% for period in period_schedules.keys() %}
+    [[run_series_analysis<periods={{period}}><truths>]]
+        execution retry delays = 3*PT30M
+        [[[events]]]
+            failed handlers = handle_met_failure.sh %(workflow)s %(point)s %(name)s %(submit_num)s
+{% endfor %}
+
+    [[run_series_analysis_ukv<periods><truths>]]
+        platform = spice
+        env-script = "eval $(rose task-env)"
+        pre-script = """
+        CYCLE_HOUR=${CYLC_TASK_CYCLE_POINT:9:2}
+        export ACCUM_PERIOD_FMT=$(printf "%02d" ${ACCUM_PERIOD})
+        
+        if [[ "$ACCUM_PERIOD" == "6" ]]; then
+            export LEAD_SEQ=6,48,6
+            export MAX_LEAD=48
+        elif [[ "$ACCUM_PERIOD" == "24" ]]; then
+            export LEAD_SEQ=24,48,24
+            export MAX_LEAD=48
+        fi
+        
+        # Same as global: VALID_START = VALID_END = cycle point
+        export VALID_START=${CYLC_TASK_CYCLE_POINT}
+        export AGG_LABEL=""
+        
+        echo "UKV SeriesAnalysis: LEAD_SEQ=$LEAD_SEQ, MAX_LEAD=$MAX_LEAD"
+        echo "VALID_START=$VALID_START, VALID_END=$CYLC_TASK_CYCLE_POINT"
+        """
+        execution retry delays = 3*PT30M
+        [[[environment]]]
+            ROSE_TASK_APP = run_series_analysis
+            FINAL_CYCLE_POINT = {{FINAL_CYCLE_POINT | default('')}}
+            ACCUM_DATA_DIR = {{UKV_PROCESSED_DIR}}
+            DATADIR = {{UKV_DATA_DIR}}
+            OUTPUT_BASE = {{OUTPUT_BASE}}
+            AREA_MASKS = {{AREA_MASKS}}
+            ACCUM_PERIOD = %(periods)s
+            TRUTH = %(truths)s
+            MET_OUTPUT_DIR = {{MET_OUTPUT_DIR}}/ukv/%(truths)s
         [[[directives]]]
             --mem = 20G
             --time = 360
+            --cpus-per-task = 8
+        [[[events]]]
+            failed handlers = handle_met_failure.sh %(workflow)s %(point)s %(name)s %(submit_num)s
+
+    [[run_series_analysis_agg<periods><truths><days_of_agg>]]
+        platform = spice
+        env-script = "eval $(rose task-env)"
+        pre-script = """
+        CYCLE_HOUR=${CYLC_TASK_CYCLE_POINT:9:2}
+        export ACCUM_PERIOD_FMT=$(printf "%02d" ${ACCUM_PERIOD})
+        
+        # Calculate days back from days_of_agg parameter (subtract 1 because we include current day)
+        DAYS_BACK=$((DAYS_OF_AGG - 1))
+        
+        # Check if we have enough data - compare cycle point to start + required days
+        CYCLE_DATE=${CYLC_TASK_CYCLE_POINT:0:8}
+        START_DATE_RAW={{START_CYCLE_POINT}}
+        START_DATE=${START_DATE_RAW:0:8}
+        MIN_DATE=$(date -u -d "${START_DATE} +${DAYS_BACK} days" +%Y%m%d)
+        
+        if [[ "$CYCLE_DATE" < "$MIN_DATE" ]]; then
+            echo "Skipping: Not enough data yet. Need ${DAYS_OF_AGG} days, current cycle $CYCLE_DATE < minimum $MIN_DATE"
+            exit 0
+        fi
+        
+        if [[ "$ACCUM_PERIOD" == "6" ]]; then
+            export LEAD_SEQ=6,60,6
+            export MAX_LEAD=60
+            CYCLE_TIME=${CYLC_TASK_CYCLE_POINT:9:4}
+            START_DATE=$(date -u -d "${CYCLE_DATE} -${DAYS_BACK} days" +%Y%m%d)
+            export VALID_START="${START_DATE}T${CYCLE_TIME}Z"
+        elif [[ "$ACCUM_PERIOD" == "24" ]]; then
+            if [[ "$CYCLE_HOUR" == "00" ]]; then
+                export LEAD_SEQ=36,144,12
+            else
+                export LEAD_SEQ=36,132,24
+            fi
+            export MAX_LEAD=144
+            # For 24hr, force VALID_START to 00Z
+            START_DATE=$(date -u -d "${CYCLE_DATE} -${DAYS_BACK} days" +%Y%m%d)
+            export VALID_START="${START_DATE}T0000Z"
+        fi
+        
+        export AGG_LABEL="${DAYS_OF_AGG}day"
+        
+        echo "Setting LEAD_SEQ=$LEAD_SEQ and MAX_LEAD=$MAX_LEAD"
+        echo "Running Series Analysis Aggregation period: ${AGG_LABEL} (${DAYS_OF_AGG} days)"
+        echo "VALID_START=$VALID_START, VALID_END=$CYLC_TASK_CYCLE_POINT"
+        """
+        [[[environment]]]
+            ROSE_TASK_APP = run_series_analysis_agg
+            FINAL_CYCLE_POINT = {{FINAL_CYCLE_POINT | default('')}}
+            ACCUM_DATA_DIR = {{PROCESSED_DIR}}
+            DATADIR = {{DATA_DIR}}
+            OUTPUT_BASE = {{OUTPUT_BASE}}
+            AREA_MASKS = {{AREA_MASKS}}
+            ACCUM_PERIOD = %(periods)s
+            TRUTH = %(truths)s
+            DAYS_OF_AGG = %(days_of_agg)s
+            MET_OUTPUT_DIR = {{MET_OUTPUT_DIR}}/%(truths)s
+        [[[directives]]]
+            --mem = 30G
+            --time = 240
 
     [[run_verpy_plotting<periods><truths>]]
         platform = spice
+        execution retry delays = 30*PT1H
         env-script = "eval $(rose task-env)"
         pre-script = """
         CYCLE_HOUR=${CYLC_TASK_CYCLE_POINT:9:2}
@@ -212,14 +490,92 @@
         """
         [[[environment]]]
             ROSE_TASK_APP = run_verpy_plotting
-            MET_SOURCE = {{MET_OUTPUT_DIR}}
+            MET_SOURCE = {{MET_OUTPUT_DIR}}/%(truths)s
             OUTDIR = {{OUTPUT_BASE}}/verpy_plots
             ACCUM_PERIOD = %(periods)s
             TRUTH = %(truths)s
+            MODEL = global
         [[[directives]]]
-            --mem = 10G
-            --time = 60
+            --mem = 20G
+            --time = 220
+
+    [[run_verpy_plotting_agg<periods><truths>]]
+        platform = spice
+        execution retry delays = 3*PT30M
+        env-script = "eval $(rose task-env)"
+        pre-script = """
+        CYCLE_HOUR=${CYLC_TASK_CYCLE_POINT:9:2}
+
+        export AGG_LABEL="7day"
+
+        if [[ "$ACCUM_PERIOD" == "6" ]]; then
+            export LEAD_SEQ=6,60,6
+        elif [[ "$ACCUM_PERIOD" == "24" ]]; then
+            if [[ "$CYCLE_HOUR" == "00" ]]; then
+                export LEAD_SEQ=12,144,12
+            else
+                export LEAD_SEQ=36,132,24
+            fi
+        fi
+        echo "Setting LEAD_SEQ=$LEAD_SEQ for VerPy plotting, period=$ACCUM_PERIOD, agg=$AGG_LABEL"
+        """
+        [[[environment]]]
+            ROSE_TASK_APP = run_verpy_plotting
+            MET_SOURCE = {{MET_OUTPUT_DIR}}/%(truths)s
+            OUTDIR = {{OUTPUT_BASE}}/verpy_plots_agg
+            ACCUM_PERIOD = %(periods)s
+            TRUTH = %(truths)s
+            MODEL = global
+        [[[directives]]]
+            --mem = 20G
+            --time = 220
+
+    [[run_verpy_plotting_ukv<periods><truths>]]
+        platform = spice
+        execution retry delays = 30*PT1H
+        env-script = "eval $(rose task-env)"
+        pre-script = """
+        CYCLE_HOUR=${CYLC_TASK_CYCLE_POINT:9:2}
+        if [[ "$ACCUM_PERIOD" == "6" ]]; then
+            export LEAD_SEQ=6,48,6
+        elif [[ "$ACCUM_PERIOD" == "24" ]]; then
+            export LEAD_SEQ=24,48,24
+        fi
+        echo "Setting LEAD_SEQ=$LEAD_SEQ for UKV VerPy plotting, period=$ACCUM_PERIOD at ${CYCLE_HOUR}Z"
+        """
+        [[[environment]]]
+            ROSE_TASK_APP = run_verpy_plotting
+            MET_SOURCE = {{MET_OUTPUT_DIR}}/ukv/%(truths)s
+            OUTDIR = {{OUTPUT_BASE}}/verpy_plots
+            ACCUM_PERIOD = %(periods)s
+            TRUTH = %(truths)s
+            MODEL = ukv
+        [[[directives]]]
+            --mem = 20G
+            --time = 180
+            --cpus-per-task = 10
+
+    [[update_imt_viewer]]
+        # Updates the ImageMetaTag webpage after VerPy plotting
+        platform = spice
+        script = """
+            module load scitools
+            python $CYLC_WORKFLOW_RUN_DIR/bin/convert_verpy_to_imt.py
+            python $CYLC_WORKFLOW_RUN_DIR/bin/create_imt_webpage.py
+        """
+        execution time limit = PT10M
+        [[[directives]]]
+        
+            --mem = 20G
+            --time = 120
+    
 
     [[housekeep]]
+        # rose_prune: removes old logs, raw pp, processed nc, GPM obs nc,
+        # and MET output while retaining 31 days of processed/obs data
+        # for the aggregation window and all generated plots.
         [[[environment]]]
             ROSE_TASK_APP = housekeep
+            DATADIR = {{DATA_DIR}}
+            PROCESSED_DIR = {{PROCESSED_DIR}}
+            MET_OUTPUT_DIR = {{MET_OUTPUT_DIR}}
