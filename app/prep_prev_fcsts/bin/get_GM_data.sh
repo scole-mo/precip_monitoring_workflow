@@ -4,6 +4,12 @@ input_date=$1
 datadir=$2
 max_lead=$3
 accum_period=$4
+trial_id=${TRIAL_ID:-}
+psuite_id=${PSUITE_ID:-}
+# "opfc" is the sentinel <source> value for normal ops (no psuite/trial)
+if [[ "$psuite_id" == "opfc" ]]; then
+    psuite_id=""
+fi
 
 x=60
 
@@ -33,6 +39,21 @@ while [[ $current_date -le $input_date_numeric ]]; do
     save_current_date=${date}T${hour}00Z
     echo "Save current date is: ${save_current_date}"
 
+    # Set source-specific mass path/filename/output prefix - mirrors app/get_data/bin/get_GM_data.sh
+    if [[ -n "$trial_id" ]]; then
+        mass_path="moose:/devfc/${trial_id}/field.pp/"
+        filename_pattern="prods_op_mogreps-g_${date}_${hour}_00_*.pp"
+        output_prefix="mogreps-g_${trial_id}"
+    elif [[ -n "$psuite_id" ]]; then
+        mass_path="moose:/opfc/atm/mogreps-g/prods/${psuite_id}.pp/"
+        filename_pattern="prods_op_mogreps-g_${date}_${hour}_00_*.pp"
+        output_prefix="mogreps-g_${psuite_id}"
+    else
+        mass_path="moose:/opfc/atm/global/prods/${year}.pp/"
+        filename_pattern="prods_op_gl-mn_${date}_${hour}_*.pp"
+        output_prefix="gl-mn"
+    fi
+
     ### Determine lead times based on forecast hour ###
 
     if [[ "$hour" == "00" || "$hour" == "12" ]]; then
@@ -59,24 +80,26 @@ while [[ $current_date -le $input_date_numeric ]]; do
 
 
     #################### UPDATE ANALYSES ##########################
-
-    mass-pull () {
-      local analysis=$1 
-      touch query
-      cat >query <<EOF
-    begin
-      filename="prods_op_gl-up_${date}_${hour}_${analysis}.pp"
-      stash=(5201,5202,4201,4202)
-    end
+    # Update analyses only exist for the normal ops archive, not trial/psuite
+    if [[ -z "$trial_id" && -z "$psuite_id" ]]; then
+        mass-pull () {
+          local analysis=$1 
+          touch query
+          cat >query <<EOF
+        begin
+          filename="prods_op_gl-up_${date}_${hour}_${analysis}.pp"
+          stash=(5201,5202,4201,4202)
+        end
 EOF
 
-      moo select -I query moose:/opfc/atm/global/prods/${year}.pp/ ${datadir}/${accum_period}_hour/${save_current_date}_gl-up_${analysis}.pp
-      rm query
-    }
+          moo select -I query moose:/opfc/atm/global/prods/${year}.pp/ ${datadir}/${accum_period}_hour/${save_current_date}_gl-up_${analysis}.pp
+          rm query
+        }
 
-    for analysis in "${analysis_runs[@]}"; do
-      mass-pull "$analysis"
-    done
+        for analysis in "${analysis_runs[@]}"; do
+          mass-pull "$analysis"
+        done
+    fi
 
     #################### Accumulation period ###########################
 
@@ -84,13 +107,13 @@ EOF
     touch query
     cat >query <<EOF
       begin
-        filename="prods_op_gl-mn_${date}_${hour}_*.pp"
+        filename="${filename_pattern}"
         stash=(5201,5202,4201,4202)
         lbft=${lead}
       end
 EOF
 
-    moo select -I query moose:/opfc/atm/global/prods/${year}.pp/ ${datadir}/${accum_period}_hour/${save_current_date}_gl-mn_T${this_lead}.pp
+    moo select -I query ${mass_path} ${datadir}/${accum_period}_hour/${save_current_date}_${output_prefix}_T${this_lead}.pp
     rm query
     }
 
@@ -107,15 +130,15 @@ EOF
     do
       this_lead=$(printf "%03d" ${lead})
       echo "Processing lead time: ${this_lead}"
-      file_to_cat="${datadir}/${accum_period}_hour/${save_current_date}_gl-mn_T${this_lead}.pp"
+      file_to_cat="${datadir}/${accum_period}_hour/${save_current_date}_${output_prefix}_T${this_lead}.pp"
       list_of_files="${list_of_files} ${file_to_cat}"
       mass-pull-accum
     done
 
     accum=$(printf "%03d" $accum_period)
     echo "Concatenating files: $list_of_files"
-    echo "cat $list_of_files > ${datadir}/${accum_period}_hour/${save_current_date}_gl-mn_${accum}.pp"
-    cat $list_of_files > ${datadir}/${accum_period}_hour/${save_current_date}_gl-mn_${accum}.pp
+    echo "cat $list_of_files > ${datadir}/${accum_period}_hour/${save_current_date}_${output_prefix}_${accum}.pp"
+    cat $list_of_files > ${datadir}/${accum_period}_hour/${save_current_date}_${output_prefix}_${accum}.pp
     
     if [ $? -ne 0 ]; then
         echo "ERROR: cat command failed"

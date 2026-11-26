@@ -11,6 +11,7 @@ from VerPy import stats
 from VerPy.parameter import get_parameter
 import matplotlib
 import os
+import re
 import argparse
 import numpy as np
 import glob
@@ -22,6 +23,8 @@ import datetime
 metmaps.MET_TRUTHS['ANALYSIS'] = 'Analysis'
 metmaps.MET_TRUTHS['OBS'] = 'Analysis'
 metmaps.MET_TRUTHS['GPM'] = 'Analysis'
+metmaps.MET_TRUTHS['MVM'] = 'Analysis'
+metmaps.MET_TRUTHS['MO_GLOBAL_OPFC'] = 'Analysis'
 
 ### Mapping of area names to VerPy map options ###
 MAPOPTS_AREAS = {
@@ -41,6 +44,17 @@ def make_add_area(area_name):
         case.data.expand_dims('areas', area_name)
     return add_area
 
+### Build a stable, filesystem/IMT-safe job id for a single VerPy stat code ###
+def score_jobid(stat_code):
+    '''Uses VerPy's own stat registry (the same source it uses for titles)
+    so each score gets its own unambiguous output folder, instead of relying
+    on downstream tools to guess the score from rendered plot filenames.'''
+    name = stats.get_statistic(stat_code).full
+    # Replace any run of non-alphanumeric characters (spaces, parentheses,
+    # hyphens, etc.) with a single underscore, e.g. "Mean (Forecast)" ->
+    # "mean_forecast", so the name is safe to use as a directory name.
+    return re.sub(r'[^A-Za-z0-9]+', '_', name).strip('_').lower()
+
 ### Funtion to parse command line arguments ###
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -53,6 +67,7 @@ def parse_args():
     parser.add_argument('--aggregated', action='store_true', help='Use aggregated file naming convention')
     parser.add_argument('--start-vdate', required=False, help='Start valid date for aggregation period (e.g., 20260319T0000Z)')
     parser.add_argument('--model', required=False, default='', help='Model name (e.g., ukv). If ukv, only UK area is plotted.')
+    parser.add_argument('--psuite-id', required=False, default='', help='Parallel suite identifier (e.g. psuite47), if plotting psuite output')
     args = parser.parse_args()
     return args
 
@@ -67,6 +82,32 @@ accumulation = args.accumulation
 aggregated = args.aggregated
 start_vdate = args.start_vdate
 model = args.model.lower() if args.model else ''
+psuite_id = args.psuite_id
+if psuite_id == 'opfc':  # sentinel <source> value for normal ops (no psuite/trial)
+    psuite_id = ''
+
+# Single flat "model" identifier used for plot folder naming and the
+# webpage's Model selector (e.g. "ukv", "global", "psuite47"). psuite_id is
+# checked first since "model" is always explicitly set to "global" or "ukv"
+# by every runtime block (never blank), so it would otherwise always win and
+# psuite_id would never be used. A psuite trial replaces "global" entirely
+# rather than being a separate axis, since psuite comparisons are only ever
+# run against the global model, never ukv.
+model_id = psuite_id or model or 'global'
+
+# For plot folder naming only (not the actual truth-data lookup, which still
+# uses the real truth_type below): mvm compares a psuite's own forecast
+# against the opfc baseline model, rather than against a real observed/
+# analysed truth, so label it "MODEL" instead of "MVM" to make clear the
+# "truth" here is itself another model's forecast.
+jid_truth = 'MODEL' if truth_type == 'MVM' else truth_type
+
+# mvm (model-vs-model) compares a psuite against the opfc baseline - comparing
+# opfc to itself is meaningless, and there is no MET output to plot for it
+# (see run_code.sh), so skip immediately.
+if truth_type == 'MVM' and not psuite_id:
+    print('Skipping mvm plotting: source is opfc, nothing to compare it to.')
+    sys.exit(0)
 
 # Use a looser threshold for single-time runs to avoid all-NaN CTC maps.
 stats.derived.EVENT_THRESHOLD = 1 if aggregated else 0
@@ -106,6 +147,9 @@ if truth_type == 'GPM':
 elif truth_type == 'ANALYSIS':
     verpy_class='6'
     truth_key=0
+elif truth_type == 'MVM':
+    verpy_class='6'
+    truth_key=0
 
 # if accumulation == '6':
 #     accum_period=0.
@@ -143,10 +187,22 @@ bounds_6053 = [0, 0.5, 1, 2, 5, 10, 20, 50]
 # }
 
 bounds_6905 = [0, 0.1, 0.25, 0.75, 1.25, 1.75, 2, 5]
+bounds_6051 = [-10, -5, -2, -1, 0, 1, 2, 5, 10]
 bounds_6901 = [-0.34, -0.1, 0, 0.2, 0.4, 0.6, 0.8, 1.0]
+bounds_6933 = list(np.arange(0, 1.1, 0.1))
+
+######## Create diffmap colour theme with a white band around zero ######
+diffmap = plottheme.get_theme('diffmap')
+diff_n_bins = len(bounds_6051) - 1
+diff_base_cmap = matplotlib.colormaps['bwr']
+diff_colours = [to_hex(diff_base_cmap(i / (diff_n_bins - 1))) for i in range(diff_n_bins)]
+# Whiten the bins either side of zero so small/no bias shows as a clear white band
+zero_idx = bounds_6051.index(0)
+diff_colours[zero_idx - 1] = '#FFFFFF'
+diff_colours[zero_idx] = '#FFFFFF'
+diffmap['palette']['mapstyle']['cmap'] = ListedColormap(diff_colours, N=len(diff_colours))
 
 ######### Creating 1D score plot theme ############
-
 
 # Generate colours from a matplotlib colormap (7 colours for 7 bins)
 cmap = matplotlib.colormaps['copper']
@@ -170,7 +226,13 @@ mae_theme['palette'].update({
 if aggregated:
     dt_start = datetime.datetime.strptime(start_vdate, '%Y%m%dT%H%MZ')
     dt_end = datetime.datetime.strptime(vdate, '%Y%m%dT%H%MZ')
-    agg_suffix = f'_agg{(dt_end - dt_start).days}d'
+    # VALID_START is set (in flow.cylc) to DAYS_OF_AGG - 1 days before the
+    # cycle point, so that the window inclusively covers DAYS_OF_AGG
+    # calendar days (e.g. 6 days back + today = 7 days of data for a 7-day
+    # aggregation). (dt_end - dt_start).days is therefore DAYS_OF_AGG - 1,
+    # not DAYS_OF_AGG itself - add 1 so the label matches the actual number
+    # of days of data included, rather than the raw timestamp delta.
+    agg_suffix = f'_agg{(dt_end - dt_start).days + 1}d'
 else:
     agg_suffix = ''
 
@@ -194,76 +256,118 @@ for s, area in job_args:
     print("{} Start of job...".format(now))
     fcr = os.path.basename(s).split('_L')[-1].replace('.nc', '')
     area_safe = str(area).replace(' ', '_')
-    jid = f'{vdate}_L{fcr}_{area_safe}_{truth_type}_{accumulation}hr_{model}{agg_suffix}'
+    jid = f'{vdate}_L{fcr}_{area_safe}_{jid_truth}_{accumulation}hr_{model_id}{agg_suffix}'
     area_callback = make_add_area(area)
-    #s='/data/scratch/sebastian.cole/global_precip_stand_alone/20260313T0000Z/SERIES_ANALYSIS_OUTPUT_AGAINST_ANALYSIS_6hr_V20260313T0000Z_L06.nc '
-    # primary_stat = stats[0]
-    # vrange = stat_vranges.get(primary_stat, [0, 0.5, 1, 2, 5, 10, 15])
     common_options = {
         'jobid': jid,
-        #'metadata': 'example_viewer',
         'param': ppn,
         # 'start': start_vdate if aggregated else vdate,
         # 'end': vdate,
-        #'stats': stats,
         'source': s,
         'system': 'MET',
         'names': truth_type,
         'truth': truth_key,
         'output': 'errormap',
-        #'vrange': vrange,
-        #'mapopts': [MAPOPTS_AREAS[area]],
-        #'title': '%p %s %f %e %h'
     }
     if model == 'ukv':
         common_options['mapopts'] = acc_for_ukv_rot_pol
     elif area:
         common_options['mapopts'] = [MAPOPTS_AREAS[area]]
     varying_options = [
-        {#'jobid': jid/'sl1l2',
-         'stats':[1051, 2051],
+        {#Forecast Mean,
+         'stats':[1051],
          'type': 'sl1l2',
-         'title': '%p %s %f',
+         'title': '%p %s %f' + f' Mode:{model}',
          'vrange': bounds_1051_2051,
          'plottheme': radar_theme,
         },
-        {##'jobid': jid + '_ctc',
-         'stats':[6904],
-         'type': 'ctc',
-         'thresh': ['>0.1', '>1', '>4'], # '>5', '>10', '>20'],
-         'vrange': bounds_6905,
-         'title': '%p %s %f %e %h'
-        # 'plottheme': mae_theme,
+        {#Analysis Means,
+         'stats':[2051],
+         'type': 'sl1l2',
+         'title': '%p %s %f' + f' Truth Type:{truth_type}',
+         'vrange': bounds_1051_2051,
+         'plottheme': radar_theme,
         },
-         {##'jobid': jid + '_ctc',
-         'stats':[6901],
-         'type': 'ctc',
-         'thresh': ['>0.1', '>1', '>4'], # '>5', '>10', '>20'],
-         'vrange': bounds_6901,
-         'title': '%p %s %f %e %h'
-        # 'plottheme': mae_theme,
-        },
-        {#'jobid': jid + '_sl1l2_6053',
-         'stats':[6053],
+        {#'Mean Absolute Error (MAE)',
+         'stats':[6053],  
          'type': 'sl1l2',
          'vrange': bounds_6053,
+         'plottheme': 'RdPu',
          'title': '%p %s %f %e'},
-        #  'plottheme': radar_theme_6053,
-        
-
-        # },
-
+        # {#'RMSE',
+        #  'stats':[6752],
+        #  'type': 'cnt',
+        #  'vrange': bounds_6053,
+        #  'plottheme': 'RdPu',
+        #  'title': '%p %s %f %e'},
         ]
+    if truth_type != 'MVM':
+        # MET series_analysis only produces CTC (contingency table) stats
+        # against a real truth (gpm/analysis) - mvm output only has SL1L2
+        # partial sums, so these would always fail with "No stats found
+        # for stat type ctc" if run against an mvm comparison.
+        varying_options.extend([
+            {## Frequency Bias
+             'stats':[6904],
+             'type': 'ctc',
+             'thresh': ['>0.1', '>1', '>4', '>8', '>16', '>30', '>50', '>75', '>100'],
+             'vrange': bounds_6905,
+             'title': '%p %s %f %e %h'
+            # 'plottheme': mae_theme,
+            },
+            {# BASER - Frequency of observations 
+             'stats':[6933],
+             'type': 'ctc',
+             'thresh': ['>0.1', '>1', '>4', '>8', '>16', '>30', '>50', '>75', '>100'],
+             'title': '%p %s %f %e %h',
+             'vrange': bounds_6933,
+             'plottheme': 'Blues',
+            },
+             {# Gilbert Skill Score/ Equitable Threat Score,
+             'stats':[6901],
+             'type': 'ctc',
+             'thresh': ['>0.1', '>1', '>4', '>8', '>16', '>30', '>50', '>75', '>100'],
+             'vrange': bounds_6901,
+             'title': '%p %s %f %e %h'
+            # 'plottheme': mae_theme,
+            },
+        ])
+    if truth_type == 'MVM':
+        varying_options.append(
+            {# Mean error for model vs model differences only
+             'stats':[6051],
+             'type': 'sl1l2',
+             'vrange': bounds_6051,
+             'plottheme': diffmap,
+             'title': '%p %w %f' + f' {psuite_id} - {model}',
+            }
+        )
+    else:
+        varying_options.append(
+            {# Mean error 
+             'stats':[6051],
+             'type': 'sl1l2',
+             'vrange': bounds_6051,
+             'plottheme': diffmap,
+             'title': '%p %w %f %e',
+            }
+        )
 
     print(f'Running job: {jid}')
+    run_dir = os.path.join(outdir, jid)
+    print(f'Creating run directory: {run_dir}')
+    os.makedirs(run_dir, exist_ok=True)
     for opts in varying_options:
-        # run_opts = {**common_options, **opts, 'jobid': f"{jid}/{opts['type']}_{opts['stats'][0]}"}
-        # VerPy.job.run(outdir, run_opts, verbose=False, load_callback=area_callback, create_viewer=False)
-        run_dir = os.path.join(outdir, jid)
-        print(f'Creating run directory: {run_dir}')
-        os.makedirs(run_dir, exist_ok=True)
-        run_opts = {**common_options, **opts, 'jobid': f"{opts['type']}_{opts['stats'][0]}"}
-        VerPy.job.run(run_dir, run_opts, verbose=False, load_callback=area_callback, create_viewer=False)
+        # Run one VerPy job per individual score, so each gets its own jobid
+        # (output folder) that unambiguously identifies that score, instead of
+        # bundling multiple scores (e.g. 1051 & 2051) under a single jobid.
+        # Folders are named purely from the worded score (e.g. "mean_forecast"),
+        # relying on VerPy's stat names being distinct from one another.
+        for stat_code in opts['stats']:
+            single_opts = {**opts, 'stats': [stat_code]}
+            jobid = score_jobid(stat_code)
+            run_opts = {**common_options, **single_opts, 'jobid': jobid}
+            VerPy.job.run(run_dir, run_opts, verbose=False, load_callback=area_callback, create_viewer=False)
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print("{} After VerPy.job.run...".format(now))
 

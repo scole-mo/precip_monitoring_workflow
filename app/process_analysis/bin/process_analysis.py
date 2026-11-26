@@ -18,6 +18,8 @@ def parse_args():
     parser.add_argument("--accum_period", type=int, required=True)
     parser.add_argument("--prep_hours", type=int)
     parser.add_argument("--model", default="global", help="Model type: global or ukv")
+    parser.add_argument("--trial_id", default="", help="devfc trial identifier (e.g. mi-bg180), if processing trial output")
+    parser.add_argument("--psuite_id", default="", help="Parallel suite identifier (e.g. psuite47), if processing psuite output")
     args = parser.parse_args()
     return args
 
@@ -54,9 +56,23 @@ def main():
     accum_period = args.accum_period
     prep = args.prep_hours
     model = args.model
+    trial_id = args.trial_id
+    psuite_id = args.psuite_id
+    if psuite_id == "opfc":  # sentinel <source> value for normal ops (no psuite/trial)
+        psuite_id = ""
     
-    # Set file prefix based on model
-    file_prefix = "ukv" if model == "ukv" else "gl-mn"
+    # Set file prefix based on model / trial / psuite - mirrors output_prefix in get_GM_data_trial.sh
+    if trial_id:
+        file_prefix = f"mogreps-g_{trial_id}"
+    elif psuite_id:
+        file_prefix = f"mogreps-g_{psuite_id}"
+    elif model == "ukv":
+        file_prefix = "ukv"
+    else:
+        file_prefix = "gl-mn"
+    
+    # Tag appended to output filenames so trial/psuite runs don't collide with normal output
+    suite_tag = f"_{trial_id}" if trial_id else (f"_{psuite_id}" if psuite_id else "")
     
     LOGGER.info(f" DATETIME: {dt}")
     LOGGER.info(f" DATADIR: {datadir}")
@@ -64,6 +80,8 @@ def main():
     LOGGER.info(f" ACCUM_PERIOD: {accum_period}")
     LOGGER.info(f" PREP_HOURS: {prep}")
     LOGGER.info(f" MODEL: {model}")
+    LOGGER.info(f" TRIAL_ID: {trial_id}")
+    LOGGER.info(f" PSUITE_ID: {psuite_id}")
     LOGGER.info(f" FILE_PREFIX: {file_prefix}")
 
     # Determine which datetimes to process
@@ -164,7 +182,7 @@ def main():
             total_analysis.data = total_data
 
             total_analysis.attributes['valid_time'] = VT
-            total_path_to_save = f"{output_dir}/VT{VT}_analysis_{accum}hr.nc"
+            total_path_to_save = f"{output_dir}/VT{VT}_analysis_{accum}hr{suite_tag}.nc"
 
             LOGGER.info(f"Saving output to: {total_path_to_save}")
             iris.save(total_analysis, total_path_to_save)

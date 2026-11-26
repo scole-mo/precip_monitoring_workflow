@@ -22,6 +22,8 @@ def parse_args():
     parser.add_argument("--trial2")
     parser.add_argument("--accum_period", type=int, required=True)
     parser.add_argument("--model", default="global", help="Model type: global or ukv")
+    parser.add_argument("--trial_id", default="", help="devfc trial identifier (e.g. mi-bg180), if processing trial output")
+    parser.add_argument("--psuite_id", default="", help="Parallel suite identifier (e.g. psuite47), if processing psuite output")
     args = parser.parse_args()
     return args
 
@@ -349,9 +351,23 @@ def main():
     prep = args.prep_hours
     accum = args.accum_period
     model = args.model
+    trial_id = args.trial_id
+    psuite_id = args.psuite_id
+    if psuite_id == "opfc":  # sentinel <source> value for normal ops (no psuite/trial)
+        psuite_id = ""
     
-    # Set file prefix based on model
-    file_prefix = "ukv" if model == "ukv" else "gl-mn"
+    # Set file prefix based on model / trial / psuite - mirrors output_prefix in get_GM_data_trial.sh
+    if trial_id:
+        file_prefix = f"mogreps-g_{trial_id}"
+    elif psuite_id:
+        file_prefix = f"mogreps-g_{psuite_id}"
+    elif model == "ukv":
+        file_prefix = "ukv"
+    else:
+        file_prefix = "gl-mn"
+    
+    # Tag appended to output filenames so trial/psuite runs don't collide with normal output
+    suite_tag = f"_{trial_id}" if trial_id else (f"_{psuite_id}" if psuite_id else "")
     
     LOGGER.info(f" DATETIME: {dt}")
     LOGGER.info(f" DATADIR: {datadir}")
@@ -359,6 +375,8 @@ def main():
     LOGGER.info(f" PREP_HOURS: {prep}")
     LOGGER.info(f" ACCUM_PERIOD: {accum}")
     LOGGER.info(f" MODEL: {model}")
+    LOGGER.info(f" TRIAL_ID: {trial_id}")
+    LOGGER.info(f" PSUITE_ID: {psuite_id}")
     LOGGER.info(f" FILE_PREFIX: {file_prefix}")
 
     #accum_periods = [accum]
@@ -424,7 +442,7 @@ def main():
                 VT = valid_time.strftime("%Y%m%dT%H%MZ")
                 accum_cube.attributes['valid_time'] = VT
                 
-                file_to_save = f"{output_dir}/VT{VT}_I{process_dt}_{accum}hr_accums.nc"
+                file_to_save = f"{output_dir}/VT{VT}_I{process_dt}_{accum}hr_accums{suite_tag}.nc"
                 LOGGER.info(f"Saving: {file_to_save}")
                 iris.save(accum_cube, file_to_save)
                 print(f"OUTPUT FILE SAVED: {file_to_save}")
@@ -509,9 +527,20 @@ def main():
                 # Calculate lead time (valid - init) in hours
                 lead_hours = (slice_valid_dt - init_time).total_seconds() / 3600
                 
-                # Only save files at valid times that are multiples of the accumulation period
-                # e.g., for 6hr accums from 03Z init: T+6 (09Z), T+12 (15Z), T+18 (21Z), etc.
-                if lead_hours < accum or lead_hours % accum != 0 or slice_valid_time.minute != 0:
+                # Only save files at valid times that fall on an accumulation boundary.
+                # For 6hr accums, any valid time that is a multiple of the period relative
+                # to the init time is valid, e.g. for 6hr accums from 03Z init: T+6 (09Z),
+                # T+12 (15Z), T+18 (21Z), etc.
+                # For 24hr accums, valid times must be anchored to 00Z regardless of the
+                # init hour, since series analysis aggregates 00Z- and 12Z-initialized
+                # forecasts together against common 00Z valid times (e.g. a 12Z init at
+                # T+36 is valid at 00Z two days later and must not be skipped).
+                if accum == 24:
+                    on_boundary = slice_valid_time.hour == 0
+                else:
+                    on_boundary = lead_hours % accum == 0
+
+                if lead_hours < accum or not on_boundary or slice_valid_time.minute != 0:
                     print(f"Skipping {slice_valid_time} (lead={lead_hours}h) - not on {accum}-hourly lead boundary")
                     continue
                 
@@ -524,7 +553,7 @@ def main():
                 print(f'after squeeze time slice valid_time: {sliced_cube.attributes["valid_time"]}')
                 
                 # Generate filename with valid time prefix (like analysis files)
-                file_to_save = f"{output_dir}/VT{slice_valid_dt.strftime('%Y%m%dT%H%MZ')}_I{process_dt}_{accum}hr_accums.nc"
+                file_to_save = f"{output_dir}/VT{slice_valid_dt.strftime('%Y%m%dT%H%MZ')}_I{process_dt}_{accum}hr_accums{suite_tag}.nc"
                 
                 print(f"Saving forecast file: {file_to_save}")
                 
@@ -540,7 +569,7 @@ def main():
             squeezed_cube.attributes['valid_time'] = valid_time.strftime("%Y%m%dT%H%MZ")
             
             # Generate filename with valid time prefix
-            file_to_save = f"{output_dir}/VT{valid_time.strftime('%Y%m%dT%H%MZ')}_I{process_dt}_{accum}hr_accums.nc"
+            file_to_save = f"{output_dir}/VT{valid_time.strftime('%Y%m%dT%H%MZ')}_I{process_dt}_{accum}hr_accums{suite_tag}.nc"
             
             LOGGER.info(f"Saving {file_to_save}")
             LOGGER.info(f"Cube shape: {squeezed_cube.shape} (should be 2D: lat, lon)")

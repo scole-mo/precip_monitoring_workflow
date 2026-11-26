@@ -3,16 +3,22 @@
 
 [scheduler]
     UTC mode = True
+    allow implicit tasks = True
     [[events]]
         stall timeout = PT3H
         abort on stall timeout = True
         mail events = inactivity timeout, stall
         workflow timeout = P7D
+        
+
 
 [task parameters]
     periods = 6, 24
-    truths = gpm, analysis
+    # "mvm" = model-vs-model: compares a psuite's own forecast against the opfc
+    truths = gpm, analysis, mvm
     days_of_agg = 7, 30
+    # psuite47 can be added below (e.g. "opfc, psuite47")
+    source = opfc, psuite48
     
 
 [scheduling]
@@ -23,47 +29,52 @@
     runahead limit = P0
     [[queues]]
         [[[verpy_plotting_queue]]]
-            limit = 1
-            members = run_verpy_plotting<periods><truths>
+            limit = 10
+            members = run_verpy_plotting<periods><truths><source>
         [[[verpy_plotting_ukv_queue]]]
-            limit = 1
+            limit = 10
             members = run_verpy_plotting_ukv<periods><truths>
     [[graph]]
         # Initial prep tasks (first 00Z and 12Z only)
         R1/T00 = """
-            prep_prev_fcsts<periods=6> =>prep_prev_fcsts<periods=24> => get_data<periods> & get_gpm<periods> => process_periods_with_prep<periods> => process_analysis_with_prep<periods>
+            prep_prev_fcsts<periods=6><source> =>prep_prev_fcsts<periods=24><source> => get_data<periods><source> & get_gpm<periods> => process_periods_with_prep<periods><source> => process_analysis_with_prep<periods><source>
             get_gpm<periods>
             ##@wall_clock => get_ukv_data<periods> => process_ukv_periods<periods>
         """
         R1/T12 = """
-            prep_prev_fcsts<periods> => get_data<periods> & get_gpm<periods> => process_periods_with_prep<periods> => process_analysis_with_prep<periods=6>
+            prep_prev_fcsts<periods><source> => get_data<periods><source> & get_gpm<periods> => process_periods_with_prep<periods><source> => process_analysis_with_prep<periods=6><source>
             get_gpm<periods>
             ##@wall_clock => get_ukv_data<periods> => process_ukv_periods<periods>
         """
 
         # 6hr period: runs every 6 hours, both truths
         PT6H!{{START_CYCLE_POINT}} = """
-            get_data<periods=6> => process_analysis<periods=6> => run_series_analysis<periods=6, truths=analysis>
-            get_data<periods=6> & get_gpm<periods=6> => process_periods<periods=6> => run_series_analysis<periods=6, truths>
+            get_data<periods=6><source> => process_analysis<periods=6><source> => run_series_analysis<periods=6, truths=analysis><source>
+            get_data<periods=6><source> & get_gpm<periods=6> => process_periods<periods=6><source> => run_series_analysis<periods=6, truths><source>
+            #process_periods<periods=6, source=opfc> => run_series_analysis<periods=6, truths=mvm><source>
             #get_ukv_data<periods=6> => process_ukv_periods<periods=6>
-            run_series_analysis<periods=6, truths>:finish => run_verpy_plotting<periods=6, truths>
-            run_verpy_plotting<periods=6, truths>:finish => update_imt_viewer
+            run_series_analysis<periods=6, truths><source>:finish => run_verpy_plotting<periods=6, truths><source>
+            run_verpy_plotting<periods=6, truths><source>:finish => update_imt_viewer
         """
 
         # 24hr period at 00Z: both analysis and GPM, plus aggregated analysis
         T00!{{START_CYCLE_POINT}} = """
-            get_data<periods=24> => process_analysis<periods=24> => run_series_analysis<periods=24, truths=analysis>
+            get_data<periods=24><source> => process_analysis<periods=24><source> => run_series_analysis<periods=24, truths=analysis><source>
             ##get_ukv_data<periods=24> => process_ukv_periods<periods=24>
-            get_data<periods=24> & get_gpm<periods=24> => process_periods<periods=24> => run_series_analysis<periods=24, truths=gpm>
-            #run_series_analysis<periods=24, truths>:finish => run_verpy_plotting<periods=24, truths>
-            run_series_analysis<periods=24, truths>:finish => run_series_analysis_agg<periods=24, truths, days_of_agg>
-            run_series_analysis_agg<periods=24, truths, days_of_agg=7>:finish => run_verpy_plotting_agg<periods=24, truths>
-            run_series_analysis_agg<periods=24, truths, days_of_agg>:finish => housekeep
+            get_data<periods=24><source> & get_gpm<periods=24> => process_periods<periods=24><source> => run_series_analysis<periods=24, truths=gpm><source>
+            #process_periods<periods=24><source> => run_series_analysis<periods=24, truths=mvm><source>
+            #process_periods<periods=24, source=opfc> => run_series_analysis<periods=24, truths=mvm><source>
+            run_series_analysis<periods=24, truths><source>:finish => run_verpy_plotting<periods=24, truths><source>
+            run_series_analysis<periods=24, truths><source>:finish => run_series_analysis_agg<periods=24, truths, days_of_agg><source>
+            run_series_analysis_agg<periods=24, truths, days_of_agg=7><source>:finish => run_verpy_plotting_agg<periods=24, truths><source>
+            run_series_analysis_agg<periods=24, truths, days_of_agg><source>:finish => housekeep
+            run_verpy_plotting<periods=24, truths><source>:finish => update_imt_viewer
+            run_verpy_plotting_agg<periods=24, truths><source>:finish => update_imt_viewer
         """
 
         # 24hr period at 12Z: Gets 12Z forecasts 
         T12!{{START_CYCLE_POINT}} = """
-            get_data<periods=24> & get_gpm<periods=24> => process_periods<periods=24>
+            get_data<periods=24><source> & get_gpm<periods=24> => process_periods<periods=24><source>
             ##get_ukv_data<periods=24> => process_ukv_periods<periods=24>
         """
 
@@ -115,7 +126,7 @@
         echo "Setting UKV MAX_LEAD=$MAX_LEAD for period=$ACCUM_PERIOD at ${CYCLE_HOUR}Z"
         """
 
-    [[prep_prev_fcsts<periods>]]
+    [[prep_prev_fcsts<periods><source>]]
         inherit = SET_MAX_LEAD
         execution time limit = PT6H
         execution retry delays = 12*PT30M
@@ -124,6 +135,7 @@
             START_CYCLE_POINT = {{START_CYCLE_POINT}}
             DATADIR = {{DATA_DIR}}
             ACCUM_PERIOD = %(periods)s
+            PSUITE_ID = %(source)s
         [[[directives]]]
             -l mem = 2gb
             -q = shared
@@ -172,7 +184,7 @@
             --mem = 10G
             --time = 10
 
-    [[get_data<periods>]]
+    [[get_data<periods><source>]]
         inherit = SET_MAX_LEAD
         execution time limit = PT4H
         execution retry delays = 12*PT30M
@@ -181,9 +193,10 @@
             DATADIR = {{DATA_DIR}}
             ACCUM_PERIOD = %(periods)s
             MODEL = global
+            PSUITE_ID = %(source)s
         [[[directives]]]
-            -l mem = 2gb
-            -q = shared
+            --mem = 2G
+            
 
     [[prep_prev_ukv<periods>]]
         inherit = SET_MAX_LEAD_UKV
@@ -218,8 +231,7 @@
             ACCUM_PERIOD = %(periods)s
             MODEL = ukv
         [[[directives]]]
-            -l mem = 2gb
-            -q = shared
+            --mem = 2G
 
     [[get_gpm<periods>]]
         inherit = SET_MAX_LEAD
@@ -237,7 +249,7 @@
             --mem = 10G
             --time = 10
 
-    [[PROCESS<periods>]]
+    [[PROCESS<periods><source>]]
         platform = spice
         execution retry delays = 6*PT1H
         [[[environment]]]
@@ -245,6 +257,7 @@
             DATADIR = {{DATA_DIR}}
             ACCUM_PERIOD = %(periods)s
             MODEL = global
+            PSUITE_ID = %(source)s
         [[[directives]]]
             --mem = 20G
             --time = 90
@@ -261,13 +274,13 @@
             --mem = 20G
             --time = 90
 
-    [[process_analysis<periods>]]
-        inherit = PROCESS<periods>
+    [[process_analysis<periods><source>]]
+        inherit = PROCESS<periods><source>
         [[[environment]]]
             ROSE_TASK_APP = process_analysis
 
-    [[process_analysis_with_prep<periods>]]
-        inherit = PROCESS<periods>, SET_MAX_LEAD
+    [[process_analysis_with_prep<periods><source>]]
+        inherit = PROCESS<periods><source>, SET_MAX_LEAD
         script = """
         export PREP_HOURS=${MAX_LEAD:-60}
         echo "Setting PREP_HOURS=$PREP_HOURS for analysis backfill"
@@ -276,13 +289,13 @@
         [[[environment]]]
             ROSE_TASK_APP = process_analysis
 
-    [[process_periods<periods>]]
-        inherit = PROCESS<periods>
+    [[process_periods<periods><source>]]
+        inherit = PROCESS<periods><source>
         [[[environment]]]
             ROSE_TASK_APP = process_periods
 
-    [[process_periods_with_prep<periods>]]
-        inherit = PROCESS<periods>, SET_MAX_LEAD
+    [[process_periods_with_prep<periods><source>]]
+        inherit = PROCESS<periods><source>, SET_MAX_LEAD
         script = """
         export PREP_HOURS=${MAX_LEAD:-144}
         echo "Setting PREP_HOURS=$PREP_HOURS from MAX_LEAD"
@@ -322,7 +335,7 @@
         [[[environment]]]
             ROSE_TASK_APP = process_periods
 
-    [[run_series_analysis<periods><truths>]]
+    [[run_series_analysis<periods><truths><source>]]
         platform = spice
         env-script = "eval $(rose task-env)"
         pre-script = """
@@ -358,14 +371,15 @@
             AREA_MASKS = {{AREA_MASKS}}
             ACCUM_PERIOD = %(periods)s
             TRUTH = %(truths)s
-            MET_OUTPUT_DIR = {{MET_OUTPUT_DIR}}/%(truths)s
+            PSUITE_ID = %(source)s
+            MET_OUTPUT_DIR = {{MET_OUTPUT_DIR}}/%(source)s/%(truths)s
         [[[directives]]]
             --mem = 120G
             --time = 30
             --cpus-per-task = 10
 
 {% for period in period_schedules.keys() %}
-    [[run_series_analysis<periods={{period}}><truths>]]
+    [[run_series_analysis<periods={{period}}><truths><source>]]
         execution retry delays = 3*PT30M
         [[[events]]]
             failed handlers = handle_met_failure.sh %(workflow)s %(point)s %(name)s %(submit_num)s
@@ -411,7 +425,7 @@
         [[[events]]]
             failed handlers = handle_met_failure.sh %(workflow)s %(point)s %(name)s %(submit_num)s
 
-    [[run_series_analysis_agg<periods><truths><days_of_agg>]]
+    [[run_series_analysis_agg<periods><truths><days_of_agg><source>]]
         platform = spice
         env-script = "eval $(rose task-env)"
         pre-script = """
@@ -466,12 +480,13 @@
             ACCUM_PERIOD = %(periods)s
             TRUTH = %(truths)s
             DAYS_OF_AGG = %(days_of_agg)s
-            MET_OUTPUT_DIR = {{MET_OUTPUT_DIR}}/%(truths)s
+            PSUITE_ID = %(source)s
+            MET_OUTPUT_DIR = {{MET_OUTPUT_DIR}}/%(source)s/%(truths)s
         [[[directives]]]
             --mem = 30G
             --time = 240
 
-    [[run_verpy_plotting<periods><truths>]]
+    [[run_verpy_plotting<periods><truths><source>]]
         platform = spice
         execution retry delays = 30*PT1H
         env-script = "eval $(rose task-env)"
@@ -490,16 +505,17 @@
         """
         [[[environment]]]
             ROSE_TASK_APP = run_verpy_plotting
-            MET_SOURCE = {{MET_OUTPUT_DIR}}/%(truths)s
-            OUTDIR = {{OUTPUT_BASE}}/verpy_plots
+            MET_SOURCE = {{MET_OUTPUT_DIR}}/%(source)s/%(truths)s
+            OUTDIR = {{OUTPUT_BASE}}/verpy_plots/%(source)s
             ACCUM_PERIOD = %(periods)s
             TRUTH = %(truths)s
             MODEL = global
+            PSUITE_ID = %(source)s
         [[[directives]]]
             --mem = 20G
             --time = 220
 
-    [[run_verpy_plotting_agg<periods><truths>]]
+    [[run_verpy_plotting_agg<periods><truths><source>]]
         platform = spice
         execution retry delays = 3*PT30M
         env-script = "eval $(rose task-env)"
@@ -507,25 +523,46 @@
         CYCLE_HOUR=${CYLC_TASK_CYCLE_POINT:9:2}
 
         export AGG_LABEL="7day"
+        export AGGREGATED=true
+
+        # This task is only ever triggered for the 7-day aggregation (see the
+        # run_series_analysis_agg<days_of_agg=7> trigger in [[graph]]), so
+        # DAYS_OF_AGG is fixed here to compute the matching VALID_START used
+        # to find the AGGREGATED MET output files written by that task.
+        DAYS_OF_AGG=7
+        DAYS_BACK=$((DAYS_OF_AGG - 1))
+        CYCLE_DATE=${CYLC_TASK_CYCLE_POINT:0:8}
 
         if [[ "$ACCUM_PERIOD" == "6" ]]; then
             export LEAD_SEQ=6,60,6
+            CYCLE_TIME=${CYLC_TASK_CYCLE_POINT:9:4}
+            START_DATE=$(date -u -d "${CYCLE_DATE} -${DAYS_BACK} days" +%Y%m%d)
+            export VALID_START="${START_DATE}T${CYCLE_TIME}Z"
         elif [[ "$ACCUM_PERIOD" == "24" ]]; then
             if [[ "$CYCLE_HOUR" == "00" ]]; then
-                export LEAD_SEQ=12,144,12
+                export LEAD_SEQ=36,144,12
             else
                 export LEAD_SEQ=36,132,24
             fi
+            # For 24hr, force VALID_START to 00Z (matches run_series_analysis_agg)
+            START_DATE=$(date -u -d "${CYCLE_DATE} -${DAYS_BACK} days" +%Y%m%d)
+            export VALID_START="${START_DATE}T0000Z"
         fi
-        echo "Setting LEAD_SEQ=$LEAD_SEQ for VerPy plotting, period=$ACCUM_PERIOD, agg=$AGG_LABEL"
+        echo "Setting LEAD_SEQ=$LEAD_SEQ for VerPy plotting, period=$ACCUM_PERIOD, agg=$AGG_LABEL, VALID_START=$VALID_START"
         """
         [[[environment]]]
             ROSE_TASK_APP = run_verpy_plotting
-            MET_SOURCE = {{MET_OUTPUT_DIR}}/%(truths)s
-            OUTDIR = {{OUTPUT_BASE}}/verpy_plots_agg
+            MET_SOURCE = {{MET_OUTPUT_DIR}}/%(source)s/%(truths)s
+            # Shares the same output tree as run_verpy_plotting - the agg_suffix
+            # (e.g. "_agg7d") added to the job folder name by --aggregated
+            # already keeps these distinct, so there's no need for a separate
+            # verpy_plots_agg tree that downstream tools would have to know to
+            # also scan.
+            OUTDIR = {{OUTPUT_BASE}}/verpy_plots/%(source)s
             ACCUM_PERIOD = %(periods)s
             TRUTH = %(truths)s
             MODEL = global
+            PSUITE_ID = %(source)s
         [[[directives]]]
             --mem = 20G
             --time = 220
@@ -565,9 +602,8 @@
         """
         execution time limit = PT10M
         [[[directives]]]
-        
             --mem = 20G
-            --time = 120
+            --time = 180
     
 
     [[housekeep]]

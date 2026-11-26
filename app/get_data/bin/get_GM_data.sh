@@ -5,6 +5,12 @@ datadir=$2
 max_lead=$3
 accum_period=$4
 model=${MODEL:-global}  # Default to global if not set
+trial_id=${TRIAL_ID:-}
+psuite_id=${PSUITE_ID:-}
+# "opfc" is the sentinel <source> value for normal ops (no psuite/trial)
+if [[ "$psuite_id" == "opfc" ]]; then
+    psuite_id=""
+fi
 
 # Remove T and Z if present to normalize date format
 fcst_date=${fcst_date//T/}
@@ -22,9 +28,29 @@ echo "date: $date"
 echo "hour: $hour"
 echo "save_current_date: $save_current_date"
 echo "model: $model"
+echo "trial_id: $trial_id"
+echo "psuite_id: $psuite_id"
 
 # Set model-specific paths and filenames
-if [[ "$model" == "ukv" ]]; then
+# If a trial_id/psuite_id is set (via env var), pull from the devfc trial /
+# parallel suite archive instead of the normal operational (ops) archive.
+if [[ -n "$trial_id" ]]; then
+    if [[ "$model" != "global" ]]; then
+        echo "ERROR: devfc retrieval currently supports MODEL=global only"
+        exit 1
+    fi
+    mass_path="moose:/devfc/${trial_id}/field.pp/"
+    filename_pattern="prods_op_mogreps-g_${date}_${hour}_00_*.pp"
+    output_prefix="mogreps-g_${trial_id}"
+elif [[ -n "$psuite_id" ]]; then
+    if [[ "$model" != "global" ]]; then
+        echo "ERROR: psuite retrieval currently supports MODEL=global only"
+        exit 1
+    fi
+    mass_path="moose:/opfc/atm/mogreps-g/prods/${psuite_id}.pp/"
+    filename_pattern="prods_op_mogreps-g_${date}_${hour}_00_*.pp"
+    output_prefix="mogreps-g_${psuite_id}"
+elif [[ "$model" == "ukv" ]]; then
     mass_path="moose:/opfc/atm/ukv/prods/${year}.pp/"
     filename_pattern="prods_op_ukv_${date}_${hour}_*.pp"
     output_prefix="ukv"
@@ -38,7 +64,7 @@ fi
 # Ensure base data directory and output directories exist before any moo select writes.
 mkdir -p "${datadir}"
 mkdir -p "${datadir}/${accum_period}_hour"
-if [[ "$model" == "global" ]]; then
+if [[ "$model" == "global" && -z "$trial_id" && -z "$psuite_id" ]]; then
   mkdir -p "${datadir}/6_hour"
 fi
 
@@ -70,7 +96,7 @@ leads_h=$(echo $leads_h)  # Remove trailing space if needed
 
 #################### UPDATE ANALYSES (Global model only) ##########################
 ## 0 & 6 used here as update analyses are only available at 000 and 006 ##
-if [[ "$model" == "global" ]]; then
+if [[ "$model" == "global" && -z "$trial_id" && -z "$psuite_id" ]]; then
     mass-pull-analysis () {
       local analysis=$1 
       touch query
